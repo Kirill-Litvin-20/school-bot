@@ -62,11 +62,12 @@ def get_user_type_keyboard():
 
 def get_main_menu_keyboard():
     buttons = [
-        [InlineKeyboardButton(text="Оставить заявку", callback_data="menu_signup")],
-        [InlineKeyboardButton(text="Преподаватели", callback_data="menu_teachers")],
+        [InlineKeyboardButton(text="📝 Оставить заявку", callback_data="menu_signup")],
+        [InlineKeyboardButton(text="👨‍🏫 Преподаватели", callback_data="menu_teachers")],
         [InlineKeyboardButton(text="🎁 Акции и предложения", callback_data="menu_offers")],
-        [InlineKeyboardButton(text="Отзывы", callback_data="menu_reviews")],
-        [InlineKeyboardButton(text="Личный кабинет", callback_data="menu_cabinet")],
+        [InlineKeyboardButton(text="⭐ Отзывы", callback_data="menu_reviews")],
+        [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_cabinet")],
+        [InlineKeyboardButton(text="📢 Канал школы", url="https://t.me/school_integral_ru")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -312,6 +313,7 @@ def get_cabinet_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="💳 Оплата", callback_data="menu_paid")],
+            [InlineKeyboardButton(text="🎁 Мой реферальный код", callback_data="show_referral_code")],
             [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
         ]
     )

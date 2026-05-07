@@ -75,6 +75,12 @@ async def start_handler(message: Message, state: FSMContext):
     start_parts = (message.text or "").split(maxsplit=1)
     start_payload = start_parts[1].strip() if len(start_parts) > 1 else ""
 
+    # Обработка реферальной ссылки
+    referral_code = None
+    if start_payload.lower().startswith("ref_"):
+        referral_code = start_payload[4:].strip()
+        await state.update_data(referral_code=referral_code)
+
     if start_payload.lower().startswith("invite_"):
         token = start_payload[len("invite_"):].strip()
         invite = get_onboarding_invite_by_token(token)
@@ -346,6 +352,26 @@ async def get_photo_id(message: Message):
         "⏳ <i>Жду фото...</i>",
         parse_mode="HTML"
     )
+
+
+@router.callback_query(lambda c: c.data == "show_referral_code")
+async def show_referral_code(callback: CallbackQuery):
+    telegram_id = callback.from_user.id
+    referral_link = f"https://t.me/[bot_username]?start=ref_{telegram_id}"
+
+    await callback.message.answer(
+        f"🎁 <b>ВАШ РЕФЕРАЛЬНЫЙ КОД</b>\n\n"
+        f"Отправьте эту ссылку друзьям и получайте скидки!\n\n"
+        f"<code>{referral_link}</code>\n\n"
+        f"<b>Как это работает:</b>\n"
+        f"1️⃣ Друг переходит по вашей ссылке\n"
+        f"2️⃣ Оставляет заявку и оплачивает первое занятие\n"
+        f"3️⃣ Вы получаете <b>20% скидку</b> на следующее занятие\n"
+        f"4️⃣ Ваш друг получает <b>10% скидку</b>\n\n"
+        f"✨ Начните приглашать друзей и зарабатывайте скидки!",
+        parse_mode="HTML"
+    )
+    await callback.answer()
 
 
 @router.callback_query(lambda c: c.data == "menu_offers")
