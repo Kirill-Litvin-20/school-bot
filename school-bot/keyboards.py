@@ -66,7 +66,7 @@ def get_main_menu_keyboard():
         [InlineKeyboardButton(text="Преподаватели", callback_data="menu_teachers")],
         [InlineKeyboardButton(text="Отзывы", callback_data="menu_reviews")],
         [InlineKeyboardButton(text="Личный кабинет", callback_data="menu_cabinet")],
-        [InlineKeyboardButton(text="Отправить чек об оплате", callback_data="menu_paid")],
+        [InlineKeyboardButton(text="💳 Оплата", callback_data="menu_paid")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -253,20 +253,33 @@ def get_payment_direction_keyboard(payment_request_id: int, directions):
 
 
 def get_payment_topup_keyboard(payment_request_id: int, direction_id: int):
-    buttons = []
-    # Строки по 4 кнопки
-    for i in range(1, 21, 4):
-        row = []
-        for j in range(4):
-            num = i + j
-            if num <= 20:
-                row.append(
-                    InlineKeyboardButton(
-                        text=f"+{num}",
-                        callback_data=f"payadd_{payment_request_id}_{direction_id}_{num}",
-                    )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✨ +1",
+                    callback_data=f"payadd_{payment_request_id}_{direction_id}_1",
+                ),
+                InlineKeyboardButton(
+                    text="🎁 +4 (сэкономь)",
+                    callback_data=f"payadd_{payment_request_id}_{direction_id}_4",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="💎 +8 (выгодно)",
+                    callback_data=f"payadd_{payment_request_id}_{direction_id}_8",
+                ),
+                InlineKeyboardButton(
+                    text="🏆 +12 (максимум)",
+                    callback_data=f"payadd_{payment_request_id}_{direction_id}_12",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📝 Указать вручную",
+                    callback_data=f"paymanual_{payment_request_id}_{direction_id}",
                 )
-        if row:
-            buttons.append(row)
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+            ],
+        ]
+    )
