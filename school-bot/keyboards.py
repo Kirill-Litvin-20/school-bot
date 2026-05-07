@@ -270,4 +270,3 @@ def get_payment_topup_keyboard(payment_request_id: int, direction_id: int):
             buttons.append(row)
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-    )
