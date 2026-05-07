@@ -357,7 +357,7 @@ async def get_photo_id(message: Message):
 @router.callback_query(lambda c: c.data == "show_referral_code")
 async def show_referral_code(callback: CallbackQuery):
     telegram_id = callback.from_user.id
-    referral_link = f"https://t.me/[bot_username]?start=ref_{telegram_id}"
+    referral_link = f"https://t.me/integral_school_ru_bot?start=ref_{telegram_id}"
 
     await callback.message.answer(
         f"🎁 <b>ВАШ РЕФЕРАЛЬНЫЙ КОД</b>\n\n"
