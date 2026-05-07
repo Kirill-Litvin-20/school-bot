@@ -63,26 +63,24 @@ def _can_manage_payments(callback: CallbackQuery) -> bool:
 @router.callback_query(ApplicationForm.menu, lambda c: c.data == "menu_paid")
 async def menu_paid(callback: CallbackQuery, state: FSMContext):
     if not _is_private_chat(callback.message):
-        await callback.answer("Оплату отправляйте в личном чате с ботом.", show_alert=True)
+        await callback.answer("⚠️ Оплату отправляйте в личном чате с ботом.", show_alert=True)
         return
 
     # Отправляем фото с ценами
     if PAYMENT_PHOTO_FILE_ID:
         await callback.message.answer_photo(
-            photo=PAYMENT_PHOTO_FILE_ID,
-            caption="💳 <b>Выберите удобный тариф</b>",
-            parse_mode="HTML"
+            photo=PAYMENT_PHOTO_FILE_ID
         )
 
     payment_text = (
         "💳 <b>РЕКВИЗИТЫ ДЛЯ ОПЛАТЫ</b>\n\n"
-        f"Номер счёта: <code>{PAYMENT_BANK_NUMBER}</code>\n"
-        f"Банк: {PAYMENT_BANK_NAME}\n"
-        f"Владелец: {PAYMENT_ACCOUNT_HOLDER}\n\n"
-        "<b>В комментарии к переводу укажите:</b>\n"
+        f"🏦 <b>Номер счёта:</b> <code>{PAYMENT_BANK_NUMBER}</code>\n"
+        f"🏢 <b>Банк:</b> {PAYMENT_BANK_NAME}\n"
+        f"👤 <b>Владелец:</b> {PAYMENT_ACCOUNT_HOLDER}\n\n"
+        "<b>📝 В комментарии к переводу укажите:</b>\n"
         "<code>[ИМЯ УЧЕНИКА]</code>\n\n"
-        "После оплаты отправьте фото, скриншот или PDF-файл чека об оплате.\n\n"
-        "Если нужно вернуться в меню, нажмите /menu"
+        "📸 <b>После оплаты отправьте фото, скриншот или PDF-файл чека об оплате.</b>\n\n"
+        "🔙 Если нужно вернуться в меню, нажмите /menu"
     )
 
     await callback.message.answer(payment_text, parse_mode="HTML")
@@ -108,12 +106,12 @@ async def get_payment_proof(message: Message, state: FSMContext):
         file_name = (doc.file_name or "").lower()
         mime_type = (doc.mime_type or "").lower()
         if mime_type != "application/pdf" and not file_name.endswith(".pdf"):
-            await message.answer("Пожалуйста, отправьте PDF-файл чека.")
+            await message.answer("❓ Пожалуйста, отправьте PDF-файл чека.")
             return
         file_id = doc.file_id
         file_type = "pdf"
     else:
-        await message.answer("Пожалуйста, отправьте фото или PDF-файл чека.")
+        await message.answer("❓ Пожалуйста, отправьте фото или PDF-файл чека.")
         return
 
     payment_request_id = create_payment_request(
@@ -151,20 +149,20 @@ async def get_payment_proof(message: Message, state: FSMContext):
             reply_markup=get_payment_check_keyboard(payment_request_id),
         )
 
-    await message.answer("Спасибо, чек отправлен. После проверки мы сообщим результат.")
+    await message.answer("✅ Спасибо, чек отправлен. После проверки мы сообщим результат.")
     await show_main_menu(message, state)
 
 
 @router.callback_query(lambda c: c.data.startswith("payment_reject_"))
 async def reject_payment_request(callback: CallbackQuery):
     if not _can_manage_payments(callback):
-        await callback.answer("Недостаточно прав", show_alert=True)
+        await callback.answer("🚫 Недостаточно прав", show_alert=True)
         return
 
     payment_request_id = int(callback.data.split("_")[2])
     payment = get_payment_request_by_id(payment_request_id)
     if not payment:
-        await callback.answer("Запрос оплаты не найден", show_alert=True)
+        await callback.answer("❌ Запрос оплаты не найден", show_alert=True)
         return
 
     (
@@ -183,11 +181,11 @@ async def reject_payment_request(callback: CallbackQuery):
     ) = payment
 
     if status == "approved":
-        await callback.answer("Эта оплата уже подтверждена", show_alert=True)
+        await callback.answer("✅ Эта оплата уже подтверждена", show_alert=True)
         return
 
     if status == "rejected":
-        await callback.answer("Эта оплата уже отклонена", show_alert=True)
+        await callback.answer("❌ Эта оплата уже отклонена", show_alert=True)
         return
 
     transitioned = try_transition_payment_request_status(
@@ -233,25 +231,26 @@ async def reject_payment_request(callback: CallbackQuery):
         try:
             await callback.bot.send_message(
                 telegram_user_id,
-                "❌ Ваша оплата пока не подтверждена.\n"
+                "❌ <b>Ваша оплата отклонена</b>\n\n"
                 "Проверьте чек или свяжитесь с администратором.",
+                parse_mode="HTML"
             )
         except Exception:
             pass
 
-    await callback.answer("Оплата отклонена")
+    await callback.answer("❌ Оплата отклонена")
 
 
 @router.callback_query(lambda c: c.data.startswith("payment_approve_"))
 async def approve_payment_request(callback: CallbackQuery):
     if not _can_manage_payments(callback):
-        await callback.answer("Недостаточно прав", show_alert=True)
+        await callback.answer("🚫 Недостаточно прав", show_alert=True)
         return
 
     payment_request_id = int(callback.data.split("_")[2])
     payment = get_payment_request_by_id(payment_request_id)
     if not payment:
-        await callback.answer("Запрос оплаты не найден", show_alert=True)
+        await callback.answer("❌ Запрос оплаты не найден", show_alert=True)
         return
 
     (
@@ -270,27 +269,27 @@ async def approve_payment_request(callback: CallbackQuery):
     ) = payment
 
     if status == "approved":
-        await callback.answer("Эта оплата уже подтверждена", show_alert=True)
+        await callback.answer("✅ Эта оплата уже подтверждена", show_alert=True)
         return
     if status == "rejected":
-        await callback.answer("Эта оплата уже отклонена", show_alert=True)
+        await callback.answer("❌ Эта оплата уже отклонена", show_alert=True)
         return
     if not telegram_user_id:
-        await callback.answer("У оплаты нет Telegram ID", show_alert=True)
+        await callback.answer("❌ У оплаты нет Telegram ID", show_alert=True)
         return
 
     students = find_students_by_telegram_id(telegram_user_id)
     if not students:
-        await callback.answer("Ученик не найден по Telegram ID", show_alert=True)
+        await callback.answer("❌ Ученик не найден по Telegram ID", show_alert=True)
         return
     if len(students) > 1:
-        await callback.answer("Найдено несколько учеников с этим Telegram ID", show_alert=True)
+        await callback.answer("⚠️ Найдено несколько учеников с этим Telegram ID", show_alert=True)
         return
 
     student_id, student_name, _, _ = students[0]
     directions = get_student_directions(student_id)
     if not directions:
-        await callback.answer("У ученика нет направлений для начисления", show_alert=True)
+        await callback.answer("❌ У ученика нет направлений для начисления", show_alert=True)
         return
 
     transitioned = try_transition_payment_request_status(
@@ -303,7 +302,7 @@ async def approve_payment_request(callback: CallbackQuery):
         payment_latest = get_payment_request_by_id(payment_request_id)
         latest_status = payment_latest[7] if payment_latest else "unknown"
         await callback.answer(
-            f"Эта оплата уже обрабатывается или обработана (статус: {latest_status})",
+            f"⚠️ Эта оплата уже обрабатывается или обработана (статус: {latest_status})",
             show_alert=True,
         )
         return
@@ -330,10 +329,10 @@ async def approve_payment_request(callback: CallbackQuery):
         direction_id, teacher_name, subject_name, lesson_balance, _ = directions[0]
         caption += (
             "\n\n"
-            f"Ученик: {student_name}\n"
-            f"Направление: {subject_name} — {teacher_name}\n"
-            f"Текущий остаток: {lesson_balance}\n\n"
-            "Выберите, сколько занятий начислить:"
+            f"👤 <b>Ученик:</b> {student_name}\n"
+            f"📚 <b>Направление:</b> {subject_name} — {teacher_name}\n"
+            f"📊 <b>Текущий остаток:</b> {lesson_balance}\n\n"
+            "⬇️ <b>Выберите, сколько занятий начислить:</b>"
         )
         try:
             await callback.message.edit_caption(caption=caption, parse_mode="HTML")
@@ -342,13 +341,13 @@ async def approve_payment_request(callback: CallbackQuery):
             )
         except Exception:
             pass
-        await callback.answer("Направление выбрано автоматически")
+        await callback.answer("✅ Направление выбрано автоматически")
         return
 
     caption += (
         "\n\n"
-        f"Ученик: {student_name}\n"
-        "Выберите направление для начисления:"
+        f"👤 <b>Ученик:</b> {student_name}\n"
+        "⬇️ <b>Выберите направление для начисления:</b>"
     )
     try:
         await callback.message.edit_caption(caption=caption, parse_mode="HTML")
@@ -357,13 +356,13 @@ async def approve_payment_request(callback: CallbackQuery):
         )
     except Exception:
         pass
-    await callback.answer("Выберите направление")
+    await callback.answer("👆 Выберите направление")
 
 
 @router.callback_query(lambda c: c.data.startswith("paydir_"))
 async def choose_payment_direction(callback: CallbackQuery):
     if not _can_manage_payments(callback):
-        await callback.answer("Недостаточно прав", show_alert=True)
+        await callback.answer("🚫 Недостаточно прав", show_alert=True)
         return
 
     _, payment_request_id_raw, direction_id_raw = callback.data.split("_")
@@ -372,12 +371,12 @@ async def choose_payment_direction(callback: CallbackQuery):
 
     payment = get_payment_request_by_id(payment_request_id)
     if not payment:
-        await callback.answer("Запрос оплаты не найден", show_alert=True)
+        await callback.answer("❌ Запрос оплаты не найден", show_alert=True)
         return
 
     lesson = get_student_lesson_by_id(direction_id)
     if not lesson:
-        await callback.answer("Направление не найдено", show_alert=True)
+        await callback.answer("❌ Направление не найдено", show_alert=True)
         return
 
     _, _, _, subject_name, lesson_balance, _, _student_name, teacher_name = lesson
@@ -406,9 +405,9 @@ async def choose_payment_direction(callback: CallbackQuery):
     )
     caption += (
         "\n\n"
-        f"Выбрано направление: {subject_name} — {teacher_name}\n"
-        f"Текущий остаток: {lesson_balance}\n\n"
-        "Выберите, сколько занятий начислить:"
+        f"📚 <b>Выбрано направление:</b> {subject_name} — {teacher_name}\n"
+        f"📊 <b>Текущий остаток:</b> {lesson_balance}\n\n"
+        "⬇️ <b>Выберите, сколько занятий начислить:</b>"
     )
 
     try:
@@ -425,7 +424,7 @@ async def choose_payment_direction(callback: CallbackQuery):
 @router.callback_query(lambda c: c.data.startswith("payadd_"))
 async def add_lessons_after_payment(callback: CallbackQuery):
     if not _can_manage_payments(callback):
-        await callback.answer("Недостаточно прав", show_alert=True)
+        await callback.answer("🚫 Недостаточно прав", show_alert=True)
         return
 
     _, payment_request_id_raw, direction_id_raw, lessons_to_add_raw = callback.data.split("_")
@@ -435,7 +434,7 @@ async def add_lessons_after_payment(callback: CallbackQuery):
 
     payment = get_payment_request_by_id(payment_request_id)
     if not payment:
-        await callback.answer("Запрос оплаты не найден", show_alert=True)
+        await callback.answer("❌ Запрос оплаты не найден", show_alert=True)
         return
 
     (
@@ -455,7 +454,7 @@ async def add_lessons_after_payment(callback: CallbackQuery):
 
     lesson = get_student_lesson_by_id(direction_id)
     if not lesson:
-        await callback.answer("Направление не найдено", show_alert=True)
+        await callback.answer("❌ Направление не найдено", show_alert=True)
         return
 
     _, _, _, subject_name, lesson_balance_before, _, student_name, teacher_name = lesson
@@ -479,7 +478,7 @@ async def add_lessons_after_payment(callback: CallbackQuery):
             status="error",
         )
         await callback.answer(
-            f"Начисление не выполнено: оплата уже обработана (статус: {latest_status})",
+            f"⚠️ Начисление не выполнено: оплата уже обработана (статус: {latest_status})",
             show_alert=True,
         )
         return
@@ -512,28 +511,30 @@ async def add_lessons_after_payment(callback: CallbackQuery):
     _, _, _, _, lesson_balance_after, _, _, _ = updated_lesson
 
     await callback.message.answer(
-        f"✅ Оплата #{payment_request_id} подтверждена\n\n"
-        f"Ученик: {student_name}\n"
-        f"Предмет: {subject_name}\n"
-        f"Преподаватель: {teacher_name}\n"
-        f"Баланс был: {lesson_balance_before}\n"
-        f"Начислено: {lessons_to_add}\n"
-        f"Баланс стал: {lesson_balance_after}"
+        f"✅ <b>Оплата #{payment_request_id} подтверждена</b>\n\n"
+        f"👤 <b>Ученик:</b> {student_name}\n"
+        f"📚 <b>Предмет:</b> {subject_name}\n"
+        f"👨‍🏫 <b>Преподаватель:</b> {teacher_name}\n"
+        f"📊 <b>Баланс был:</b> {lesson_balance_before}\n"
+        f"➕ <b>Начислено:</b> {lessons_to_add}\n"
+        f"📊 <b>Баланс стал:</b> {lesson_balance_after}",
+        parse_mode="HTML"
     )
 
     if telegram_user_id:
         try:
             await callback.bot.send_message(
                 telegram_user_id,
-                f"✅ Ваша оплата подтверждена.\n"
+                f"✅ <b>Ваша оплата подтверждена!</b>\n\n"
                 f"На баланс начислено {lessons_to_add} занятий.\n\n"
-                f"Предмет: {subject_name}\n"
-                f"Преподаватель: {teacher_name}",
+                f"📚 <b>Предмет:</b> {subject_name}\n"
+                f"👨‍🏫 <b>Преподаватель:</b> {teacher_name}",
+                parse_mode="HTML"
             )
         except Exception:
             pass
 
-    await callback.answer("Занятия начислены")
+    await callback.answer("✅ Занятия начислены")
 
 
 @router.message(lambda m: _is_private_chat(m) and _is_payment_moderator(m.from_user.id) and m.from_user.id in PENDING_MANUAL_TOPUPS)
@@ -547,12 +548,12 @@ async def process_manual_payment_amount(message: Message, state: FSMContext):
 
     text = message.text.strip()
     if not text.isdigit():
-        await message.answer("Введите количество занятий числом.")
+        await message.answer("❓ Введите количество занятий числом.")
         return
 
     lessons_to_add = int(text)
     if lessons_to_add <= 0:
-        await message.answer("Количество занятий должно быть больше нуля.")
+        await message.answer("❓ Количество занятий должно быть больше нуля.")
         return
 
     data = await state.get_data()
@@ -564,13 +565,13 @@ async def process_manual_payment_amount(message: Message, state: FSMContext):
             payment_request_id, direction_id = pending
 
     if not payment_request_id or not direction_id:
-        await message.answer("Нет активного ручного начисления. Нажмите «Указать вручную» у нужной оплаты.")
+        await message.answer("❌ Нет активного ручного начисления. Нажмите «Указать вручную» у нужной оплаты.")
         await state.clear()
         return
 
     payment = get_payment_request_by_id(payment_request_id)
     if not payment:
-        await message.answer("Запрос оплаты не найден.")
+        await message.answer("❌ Запрос оплаты не найден.")
         await state.clear()
         return
 
@@ -591,7 +592,7 @@ async def process_manual_payment_amount(message: Message, state: FSMContext):
 
     lesson = get_student_lesson_by_id(direction_id)
     if not lesson:
-        await message.answer("Направление не найдено.")
+        await message.answer("❌ Направление не найдено.")
         await state.clear()
         return
 
@@ -616,7 +617,7 @@ async def process_manual_payment_amount(message: Message, state: FSMContext):
             status="error",
         )
         await message.answer(
-            f"Не удалось завершить начисление: оплата уже обработана (статус: {latest_status})."
+            f"⚠️ Не удалось завершить начисление: оплата уже обработана (статус: {latest_status})."
         )
         PENDING_MANUAL_TOPUPS.pop(message.from_user.id, None)
         await state.clear()
@@ -635,23 +636,25 @@ async def process_manual_payment_amount(message: Message, state: FSMContext):
     _, _, _, _, lesson_balance_after, _, _, _ = updated_lesson
 
     await message.answer(
-        f"✅ Оплата #{payment_request_id} подтверждена\n\n"
-        f"Ученик: {student_name}\n"
-        f"Предмет: {subject_name}\n"
-        f"Преподаватель: {teacher_name}\n"
-        f"Баланс был: {lesson_balance_before}\n"
-        f"Начислено: {lessons_to_add}\n"
-        f"Баланс стал: {lesson_balance_after}"
+        f"✅ <b>Оплата #{payment_request_id} подтверждена</b>\n\n"
+        f"👤 <b>Ученик:</b> {student_name}\n"
+        f"📚 <b>Предмет:</b> {subject_name}\n"
+        f"👨‍🏫 <b>Преподаватель:</b> {teacher_name}\n"
+        f"📊 <b>Баланс был:</b> {lesson_balance_before}\n"
+        f"➕ <b>Начислено:</b> {lessons_to_add}\n"
+        f"📊 <b>Баланс стал:</b> {lesson_balance_after}",
+        parse_mode="HTML"
     )
 
     if telegram_user_id:
         try:
             await message.bot.send_message(
                 telegram_user_id,
-                f"✅ Ваша оплата подтверждена.\n"
+                f"✅ <b>Ваша оплата подтверждена!</b>\n\n"
                 f"На баланс начислено {lessons_to_add} занятий.\n\n"
-                f"Предмет: {subject_name}\n"
-                f"Преподаватель: {teacher_name}",
+                f"📚 <b>Предмет:</b> {subject_name}\n"
+                f"👨‍🏫 <b>Преподаватель:</b> {teacher_name}",
+                parse_mode="HTML"
             )
         except Exception:
             pass

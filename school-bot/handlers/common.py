@@ -233,7 +233,7 @@ async def show_main_menu(message_obj: Message, state: FSMContext):
         await state.update_data(user_type=user_type)
 
     await message_obj.answer(
-        "Пожалуйста, выберите нужный раздел:",
+        "📋 Пожалуйста, выберите нужный раздел:",
         reply_markup=get_main_menu_keyboard(),
     )
     await state.set_state(ApplicationForm.menu)
