@@ -66,6 +66,16 @@ async def menu_paid(callback: CallbackQuery, state: FSMContext):
         await callback.answer("⚠️ Оплату отправляйте в личном чате с ботом.", show_alert=True)
         return
 
+    # Проверяем, найден ли ученик в системе
+    students = find_students_by_telegram_id(callback.from_user.id)
+    if not students:
+        await callback.answer(
+            "❌ Вы не зарегистрированы в системе.\n"
+            "Пожалуйста, обратитесь к администратору.",
+            show_alert=True
+        )
+        return
+
     # Отправляем фото с ценами
     if PAYMENT_PHOTO_FILE_ID:
         await callback.message.answer_photo(

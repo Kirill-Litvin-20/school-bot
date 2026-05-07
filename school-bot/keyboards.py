@@ -67,7 +67,6 @@ def get_main_menu_keyboard():
         [InlineKeyboardButton(text="🎁 Акции и предложения", callback_data="menu_offers")],
         [InlineKeyboardButton(text="Отзывы", callback_data="menu_reviews")],
         [InlineKeyboardButton(text="Личный кабинет", callback_data="menu_cabinet")],
-        [InlineKeyboardButton(text="💳 Оплата", callback_data="menu_paid")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -304,5 +303,15 @@ def get_offer_application_keyboard(offer_type: str):
         inline_keyboard=[
             [InlineKeyboardButton(text="📝 Оставить заявку", callback_data=f"apply_offer_{offer_type}")],
             [InlineKeyboardButton(text="← Назад", callback_data="menu_offers")],
+        ]
+    )
+
+
+def get_cabinet_keyboard():
+    """Клавиатура для личного кабинета ученика"""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Оплата", callback_data="menu_paid")],
+            [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
         ]
     )

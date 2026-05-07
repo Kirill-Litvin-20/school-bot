@@ -8,6 +8,7 @@ from keyboards import (
     get_teacher_subject_keyboard,
     get_offers_menu_keyboard,
     get_offer_application_keyboard,
+    get_cabinet_keyboard,
 )
 from shared.database import get_teacher_catalog_subjects
 from shared.database import (
@@ -210,7 +211,7 @@ async def menu_cabinet(callback: CallbackQuery, state: FSMContext):
 
     if not students:
         await callback.message.answer(
-            "Мы пока не нашли Вас в базе учеников.\n"
+            "❌ Мы пока не нашли Вас в базе учеников.\n"
             "Пожалуйста, обратитесь к администратору, чтобы привязать Telegram ID к Вашей карточке."
         )
         await callback.answer()
@@ -233,13 +234,14 @@ async def menu_cabinet(callback: CallbackQuery, state: FSMContext):
             f"{build_recent_payments_text(recent_payments)}\n\n"
             f"{admin_contacts_text if admin_contacts_text else ''}{warning}",
             parse_mode="HTML",
+            reply_markup=get_cabinet_keyboard(),
         )
         await callback.answer()
         return
 
     text = build_cabinet_text(student_name, directions, recent_payments)
     text += build_multi_students_warning(len(students))
-    await callback.message.answer(text, parse_mode="HTML")
+    await callback.message.answer(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard())
     await callback.answer()
 
 
