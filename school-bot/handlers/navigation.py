@@ -346,19 +346,6 @@ async def get_photo_id(message: Message):
     )
 
 
-@router.message(F.photo)
-async def handle_photo(message: Message):
-    """Обработчик для любых загруженных фото"""
-    if message.photo:
-        file_id = message.photo[-1].file_id
-        await message.answer(
-            f"✅ <b>File ID:</b>\n\n"
-            f"<code>{file_id}</code>\n\n"
-            f"Скопируй это значение для использования в конфиге.",
-            parse_mode="HTML"
-        )
-
-
 @router.callback_query(lambda c: c.data == "menu_offers")
 async def show_offers(callback: CallbackQuery):
     """Показать меню с акциями"""

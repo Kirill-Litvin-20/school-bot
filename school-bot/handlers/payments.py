@@ -3,7 +3,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 import os
 
-from config import ADMIN_ID, PAYMENTS_CHAT_ID, PAYMENT_BANK_NUMBER, PAYMENT_BANK_NAME, PAYMENT_ACCOUNT_HOLDER
+from config import ADMIN_ID, PAYMENTS_CHAT_ID, PAYMENT_BANK_NUMBER, PAYMENT_BANK_NAME, PAYMENT_ACCOUNT_HOLDER, PAYMENT_PHOTO_FILE_ID
 from keyboards import (
     get_payment_check_keyboard,
     get_payment_direction_keyboard,
@@ -65,6 +65,14 @@ async def menu_paid(callback: CallbackQuery, state: FSMContext):
     if not _is_private_chat(callback.message):
         await callback.answer("Оплату отправляйте в личном чате с ботом.", show_alert=True)
         return
+
+    # Отправляем фото с ценами
+    if PAYMENT_PHOTO_FILE_ID:
+        await callback.message.answer_photo(
+            photo=PAYMENT_PHOTO_FILE_ID,
+            caption="💳 <b>Выберите удобный тариф</b>",
+            parse_mode="HTML"
+        )
 
     payment_text = (
         "💳 <b>РЕКВИЗИТЫ ДЛЯ ОПЛАТЫ</b>\n\n"
