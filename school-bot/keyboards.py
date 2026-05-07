@@ -64,6 +64,7 @@ def get_main_menu_keyboard():
     buttons = [
         [InlineKeyboardButton(text="Оставить заявку", callback_data="menu_signup")],
         [InlineKeyboardButton(text="Преподаватели", callback_data="menu_teachers")],
+        [InlineKeyboardButton(text="🎁 Акции и предложения", callback_data="menu_offers")],
         [InlineKeyboardButton(text="Отзывы", callback_data="menu_reviews")],
         [InlineKeyboardButton(text="Личный кабинет", callback_data="menu_cabinet")],
         [InlineKeyboardButton(text="💳 Оплата", callback_data="menu_paid")],
@@ -281,5 +282,27 @@ def get_payment_topup_keyboard(payment_request_id: int, direction_id: int):
                     callback_data=f"paymanual_{payment_request_id}_{direction_id}",
                 )
             ],
+        ]
+    )
+
+
+def get_offers_menu_keyboard():
+    """Меню акций и предложений"""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎁 Бесплатная диагностика", callback_data="offer_free_diagnosis")],
+            [InlineKeyboardButton(text="💰 Скидка на первый пакет", callback_data="offer_first_package")],
+            [InlineKeyboardButton(text="🎯 Скидка на первое занятие", callback_data="offer_first_lesson")],
+            [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
+        ]
+    )
+
+
+def get_offer_application_keyboard(offer_type: str):
+    """Клавиатура для оставления заявки по акции"""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📝 Оставить заявку", callback_data=f"apply_offer_{offer_type}")],
+            [InlineKeyboardButton(text="← Назад", callback_data="menu_offers")],
         ]
     )

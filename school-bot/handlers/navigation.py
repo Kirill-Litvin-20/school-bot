@@ -6,6 +6,8 @@ from aiogram.types import CallbackQuery, Message
 from keyboards import (
     get_main_menu_keyboard,
     get_teacher_subject_keyboard,
+    get_offers_menu_keyboard,
+    get_offer_application_keyboard,
 )
 from shared.database import get_teacher_catalog_subjects
 from shared.database import (
@@ -327,4 +329,102 @@ async def signup_from_teacher_card(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.answer("Пожалуйста, напишите, как к Вам обращаться.")
     await state.set_state(ApplicationForm.name)
+    await callback.answer()
+
+
+@router.message(Command("photo_id"))
+async def get_photo_id(message: Message):
+    """Команда для получения file_id фото для оплаты"""
+    await message.answer(
+        "📸 <b>Для получения file_id фото:</b>\n\n"
+        "1. Загрузи фото сюда (в этот чат)\n"
+        "2. Я выведу file_id которое нужно скопировать"
+    )
+    await message.answer(
+        "⏳ <i>Жду фото...</i>",
+        parse_mode="HTML"
+    )
+
+
+@router.message(F.photo)
+async def handle_photo(message: Message):
+    """Обработчик для любых загруженных фото"""
+    if message.photo:
+        file_id = message.photo[-1].file_id
+        await message.answer(
+            f"✅ <b>File ID:</b>\n\n"
+            f"<code>{file_id}</code>\n\n"
+            f"Скопируй это значение для использования в конфиге.",
+            parse_mode="HTML"
+        )
+
+
+@router.callback_query(lambda c: c.data == "menu_offers")
+async def show_offers(callback: CallbackQuery):
+    """Показать меню с акциями"""
+    text = (
+        "🎁 <b>СПЕЦИАЛЬНЫЕ ПРЕДЛОЖЕНИЯ</b>\n\n"
+        "Мы дарим отличные возможности для новых учеников:\n"
+    )
+    await callback.message.edit_text(text, reply_markup=get_offers_menu_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "offer_free_diagnosis")
+async def show_free_diagnosis(callback: CallbackQuery):
+    """Показать информацию о бесплатной диагностике"""
+    text = (
+        "🎁 <b>БЕСПЛАТНАЯ ДИАГНОСТИКА</b>\n\n"
+        "Мы предлагаем новым ученикам совершенно <b>бесплатное первое занятие</b> - диагностику!\n\n"
+        "<b>Что это такое?</b>\n"
+        "✅ Определим ваш уровень знаний\n"
+        "✅ Поймём ваши цели и задачи\n"
+        "✅ Подберём оптимальный план обучения\n"
+        "✅ Ответим на все вопросы\n\n"
+        "<b>Как это работает?</b>\n"
+        "1. Вы оставляете заявку\n"
+        "2. Мы свяжемся с вами\n"
+        "3. Проводим диагностическое занятие\n"
+        "4. Обсуждаем результаты и план\n\n"
+        "<i>Скидка доступна только один раз для новых учеников!</i>"
+    )
+    await callback.message.edit_text(text, reply_markup=get_offer_application_keyboard("free_diagnosis"), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "offer_first_package")
+async def show_first_package(callback: CallbackQuery):
+    """Показать информацию о скидке на первый пакет"""
+    text = (
+        "💰 <b>СКИДКА НА ПЕРВЫЙ ПАКЕТ</b>\n\n"
+        "Получите выгодную скидку при оформлении <b>первого пакета занятий</b>!\n\n"
+        "Мы верим в качество и хотим, чтобы вы попробовали обучение с лучшей стороны.\n\n"
+        "<b>Условия:</b>\n"
+        "✅ Скидка применяется только на первый пакет\n"
+        "✅ Действует для всех новых учеников\n"
+        "✅ Размер скидки уточняется при оформлении\n\n"
+        "<i>Не пропустите эту выгодную предложение!</i>"
+    )
+    await callback.message.edit_text(text, reply_markup=get_offer_application_keyboard("first_package"), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "offer_first_lesson")
+async def show_first_lesson(callback: CallbackQuery):
+    """Показать информацию о скидке на первое занятие"""
+    text = (
+        "🎯 <b>СКИДКА НА ПЕРВОЕ ЗАНЯТИЕ</b>\n\n"
+        "Начните обучение с выгодой! <b>Специальная скидка</b> ждёт вас на первое занятие!\n\n"
+        "Это отличный способ:\n"
+        "✅ Убедиться в качестве нашего обучения\n"
+        "✅ Познакомиться с преподавателем\n"
+        "✅ Узнать методику преподавания\n"
+        "✅ Сэкономить на первом шаге\n\n"
+        "<b>Как получить?</b>\n"
+        "1. Оставьте заявку\n"
+        "2. Выберите удобное время и предмет\n"
+        "3. Скидка автоматически применяется\n\n"
+        "<i>Скидка доступна один раз при первом занятии!</i>"
+    )
+    await callback.message.edit_text(text, reply_markup=get_offer_application_keyboard("first_lesson"), parse_mode="HTML")
     await callback.answer()
