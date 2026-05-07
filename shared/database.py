@@ -551,6 +551,8 @@ def _ensure_users_table_columns(cur: sqlite3.Cursor):
     existing_columns = {row[1] for row in cur.fetchall()}
     if "telegram_username" not in existing_columns:
         cur.execute("ALTER TABLE users ADD COLUMN telegram_username TEXT")
+    if "is_visible_to_students" not in existing_columns:
+        cur.execute("ALTER TABLE users ADD COLUMN is_visible_to_students INTEGER NOT NULL DEFAULT 1")
 
 
 def _ensure_postgres_bigint_columns(cur):
@@ -2783,6 +2785,126 @@ def get_recent_admin_actions(limit: int = 50):
     return rows
 
 
+def get_teacher_weekly_lessons_report(start_date: str = None, end_date: str = None) -> list:
+    """Получает отчет о количестве проведенных занятий по учителям за период.
+
+    Args:
+        start_date: начало периода (YYYY-MM-DD), по умолчанию неделю назад
+        end_date: конец периода (YYYY-MM-DD), по умолчанию сегодня
+
+    Returns:
+        Список кортежей (teacher_id, teacher_name, subject_name, lessons_count, last_lesson_date)
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+
+    if start_date is None or end_date is None:
+        from datetime import timedelta
+        today = datetime.now().strftime("%Y-%m-%d")
+        week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        start_date = start_date or week_ago
+        end_date = end_date or today
+
+    cur.execute(
+        """
+        SELECT
+            t.id,
+            t.full_name,
+            sl.subject_name,
+            COUNT(DISTINCT a.id) as lessons_count,
+            MAX(a.lesson_date) as last_lesson_date
+        FROM attendance a
+        JOIN student_lessons sl ON a.student_lesson_id = sl.id
+        JOIN teachers t ON sl.teacher_id = t.id
+        WHERE a.lesson_date BETWEEN ? AND ?
+          AND a.status IN ('present', 'completed')
+        GROUP BY t.id, sl.subject_name
+        ORDER BY t.full_name, sl.subject_name, lessons_count DESC
+        """,
+        (start_date, end_date),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def format_teacher_weekly_report(rows: list, period_desc: str = "за неделю") -> str:
+    """Форматирует отчет о занятиях учителей в красивый вид."""
+    if not rows:
+        return f"📚 Нет данных о занятиях {period_desc}."
+
+    lines = [f"📚 <b>Отчет о занятиях преподавателей {period_desc}</b>\n"]
+
+    current_teacher = None
+    for teacher_id, teacher_name, subject_name, lessons_count, last_lesson_date in rows:
+        if current_teacher != teacher_name:
+            current_teacher = teacher_name
+            lines.append(f"\n<b>👨‍🏫 {teacher_name}</b>")
+
+        lines.append(
+            f"  • {subject_name}: <b>{lessons_count}</b> занятий (последнее: {last_lesson_date})"
+        )
+
+    return "\n".join(lines)
+
+
+def format_admin_action_log(rows: list) -> str:
+    """Форматирует журнал действий админа в красивый вид."""
+    if not rows:
+        return "📋 Журнал действий пока пуст."
+
+    action_icons = {
+        "add_student": "👤",
+        "add_teacher": "👨‍🏫",
+        "add_payment": "💰",
+        "update_balance": "📊",
+        "delete_student": "🗑️",
+        "delete_teacher": "🗑️",
+        "mark_attendance": "✅",
+        "edit_teacher": "✏️",
+        "role_change": "🔄",
+        "publish": "📢",
+    }
+
+    status_icons = {
+        "success": "✅",
+        "error": "❌",
+        "pending": "⏳",
+    }
+
+    lines = ["📋 <b>Журнал действий администраторов</b>\n"]
+
+    for row in rows:
+        action_id, admin_id, action_type, target_type, target_id, details, status, created_at = row
+
+        icon = action_icons.get(action_type, "🔹")
+        status_icon = status_icons.get(status, "❓")
+        target_info = f"{target_type}#{target_id}" if target_type and target_id else "-"
+
+        # Сокращаем длинный текст details
+        details_text = ""
+        if details:
+            try:
+                if details.startswith("{"):
+                    details_obj = json.loads(details)
+                    details_text = str(details_obj)[:50]
+                else:
+                    details_text = details[:50]
+            except:
+                details_text = str(details)[:50]
+
+        lines.append(
+            f"{icon} <b>{action_type}</b> {status_icon}\n"
+            f"┌ ID: #{action_id}\n"
+            f"├ Админ: <code>{admin_id}</code>\n"
+            f"├ Цель: {target_info}\n"
+            f"├ Время: {created_at}\n"
+            f"└ Детали: {details_text if details_text else '-'}\n"
+        )
+
+    return "\n".join(lines)
+
+
 def get_user_by_telegram_id(telegram_id: int):
     conn = get_connection()
     cur = conn.cursor()
@@ -3294,6 +3416,20 @@ def get_active_admin_telegram_ids() -> list[int]:
     return [int(row[0]) for row in rows if row and row[0] is not None]
 
 
+def set_admin_visibility(telegram_id: int, is_visible: bool) -> bool:
+    """Устанавливает видимость админа для учеников (по умолчанию видимы все)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE users SET is_visible_to_students = ? WHERE telegram_id = ? AND role IN ('admin', 'superadmin')",
+        (1 if is_visible else 0, telegram_id),
+    )
+    conn.commit()
+    success = cur.rowcount > 0
+    conn.close()
+    return success
+
+
 def get_active_admin_contacts() -> list[tuple[int, str, str | None]]:
     conn = get_connection()
     cur = conn.cursor()
@@ -3303,6 +3439,7 @@ def get_active_admin_contacts() -> list[tuple[int, str, str | None]]:
         FROM users
         WHERE role IN ('admin', 'superadmin')
           AND is_active = 1
+          AND is_visible_to_students = 1
           AND telegram_id IS NOT NULL
         ORDER BY role DESC, full_name
         """
@@ -3660,3 +3797,70 @@ def mark_daily_debt_report_sent(report_date: str):
     )
     conn.commit()
     conn.close()
+
+
+def cleanup_old_data(days: int = 14) -> dict:
+    """Удаляет старые данные (старше days дней) для оптимизации БД."""
+    if USE_POSTGRES:
+        return {"status": "skipped", "message": "Cleanup only works for SQLite"}
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cutoff_date = (datetime.now() - __import__('datetime').timedelta(days=days)).strftime("%Y-%m-%d")
+
+    stats = {}
+
+    # Удаляем старые логи действий админа
+    cur.execute("SELECT COUNT(1) FROM admin_actions WHERE created_at < ?", (cutoff_date,))
+    count_before = int(cur.fetchone()[0] or 0)
+    cur.execute("DELETE FROM admin_actions WHERE created_at < ?", (cutoff_date,))
+    stats["admin_actions_deleted"] = int(cur.rowcount or 0)
+
+    # Удаляем старые публикации
+    cur.execute("DELETE FROM publication_posts WHERE status = 'sent' AND sent_at < ?", (cutoff_date,))
+    stats["publications_deleted"] = int(cur.rowcount or 0)
+
+    conn.commit()
+    conn.close()
+    return stats
+
+
+def optimize_database() -> dict:
+    """Оптимизирует БД: создаёт индексы и запускает VACUUM."""
+    if USE_POSTGRES:
+        return {"status": "skipped", "message": "Optimization only works for SQLite"}
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # Создаём важные индексы если их ещё нет
+    indexes = [
+        ("idx_admin_actions_created_at", "admin_actions(created_at)"),
+        ("idx_admin_actions_admin_id", "admin_actions(admin_telegram_id)"),
+        ("idx_students_telegram_id", "students(telegram_id)"),
+        ("idx_users_telegram_id", "users(telegram_id)"),
+        ("idx_student_lessons_student_id", "student_lessons(student_id)"),
+        ("idx_student_lessons_teacher_id", "student_lessons(teacher_id)"),
+        ("idx_teachers_telegram_id", "teachers(telegram_id)"),
+    ]
+
+    created = 0
+    for idx_name, idx_def in indexes:
+        try:
+            cur.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_def}")
+            created += 1
+        except Exception:
+            pass
+
+    conn.commit()
+
+    # VACUUM для оптимизации
+    cur.execute("VACUUM")
+    conn.commit()
+    conn.close()
+
+    return {
+        "status": "success",
+        "indexes_created": created,
+        "vacuumed": True,
+    }

@@ -3,7 +3,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 import os
 
-from config import ADMIN_ID, PAYMENTS_CHAT_ID
+from config import ADMIN_ID, PAYMENTS_CHAT_ID, PAYMENT_BANK_NUMBER, PAYMENT_BANK_NAME, PAYMENT_ACCOUNT_HOLDER
 from keyboards import (
     get_payment_check_keyboard,
     get_payment_direction_keyboard,
@@ -25,7 +25,6 @@ from states import ApplicationForm
 from .common import build_payment_caption, show_main_menu
 
 router = Router()
-PENDING_MANUAL_TOPUPS: dict[int, tuple[int, int]] = {}
 
 
 def _is_private_chat(message: Message) -> bool:
@@ -67,10 +66,18 @@ async def menu_paid(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Оплату отправляйте в личном чате с ботом.", show_alert=True)
         return
 
-    await callback.message.answer(
-        "Отправьте, пожалуйста, фото, скриншот или PDF-файл чека об оплате.\n\n"
+    payment_text = (
+        "💳 <b>РЕКВИЗИТЫ ДЛЯ ОПЛАТЫ</b>\n\n"
+        f"Номер счёта: <code>{PAYMENT_BANK_NUMBER}</code>\n"
+        f"Банк: {PAYMENT_BANK_NAME}\n"
+        f"Владелец: {PAYMENT_ACCOUNT_HOLDER}\n\n"
+        "<b>В комментарии к переводу укажите:</b>\n"
+        "<code>[ИМЯ УЧЕНИКА]</code>\n\n"
+        "После оплаты отправьте фото, скриншот или PDF-файл чека об оплате.\n\n"
         "Если нужно вернуться в меню, нажмите /menu"
     )
+
+    await callback.message.answer(payment_text, parse_mode="HTML")
     await state.set_state(ApplicationForm.payment_proof)
     await callback.answer()
 
@@ -405,47 +412,6 @@ async def choose_payment_direction(callback: CallbackQuery):
         pass
 
     await callback.answer()
-
-
-@router.callback_query(lambda c: c.data.startswith("paymanual_"))
-async def manual_payment_topup_start(callback: CallbackQuery, state: FSMContext):
-    if not _can_manage_payments(callback):
-        await callback.answer("Недостаточно прав", show_alert=True)
-        return
-
-    _, payment_request_id_raw, direction_id_raw = callback.data.split("_")
-    payment_request_id = int(payment_request_id_raw)
-    direction_id = int(direction_id_raw)
-
-    payment = get_payment_request_by_id(payment_request_id)
-    if not payment:
-        await callback.answer("Запрос оплаты не найден", show_alert=True)
-        return
-
-    lesson = get_student_lesson_by_id(direction_id)
-    if not lesson:
-        await callback.answer("Направление не найдено", show_alert=True)
-        return
-
-    _, _, _, subject_name, lesson_balance, _, student_name, teacher_name = lesson
-    await state.clear()
-    PENDING_MANUAL_TOPUPS[callback.from_user.id] = (payment_request_id, direction_id)
-
-    prompt_text = (
-        f"Ученик: {student_name}\n"
-        f"Предмет: {subject_name}\n"
-        f"Преподаватель: {teacher_name}\n"
-        f"Текущий баланс: {lesson_balance}\n\n"
-        "Введите вручную, сколько занятий начислить (только число):"
-    )
-    try:
-        await callback.bot.send_message(callback.from_user.id, prompt_text)
-        await callback.answer("Отправил запрос в личный чат с ботом", show_alert=True)
-    except Exception:
-        await callback.answer(
-            "Не удалось написать в личку. Откройте бота в личке и нажмите /start, затем повторите.",
-            show_alert=True,
-        )
 
 
 @router.callback_query(lambda c: c.data.startswith("payadd_"))

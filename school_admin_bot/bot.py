@@ -287,6 +287,31 @@ async def publication_worker():
             await publish_bot.session.close()
 
 
+async def cleanup_worker():
+    """Периодически оптимизирует БД: удаляет старые данные и запускает VACUUM."""
+    from shared.database import cleanup_old_data, optimize_database
+
+    logger = logging.getLogger(__name__)
+    cleanup_hour = int(os.getenv("SCHOOL_DB_CLEANUP_HOUR", "3"))
+
+    while True:
+        try:
+            now = datetime.now(MSK_TZ)
+            should_cleanup = now.hour == cleanup_hour and now.minute < 5
+
+            if should_cleanup:
+                logger.info("Starting database cleanup...")
+                cleanup_stats = cleanup_old_data(days=14)
+                logger.info("Cleanup completed: %s", cleanup_stats)
+                optimize_stats = optimize_database()
+                logger.info("Database optimization completed: %s", optimize_stats)
+                await asyncio.sleep(3600)
+        except Exception as exc:
+            logger.exception("Cleanup worker error: %s", exc)
+
+        await asyncio.sleep(3600)
+
+
 async def main():
     log_level, log_dir = get_log_settings()
     log_file = setup_logging("school_admin_bot", log_level=log_level, log_dir=log_dir)
@@ -311,6 +336,7 @@ async def main():
     dp.include_router(router)
     report_task = asyncio.create_task(debt_report_worker())
     publication_task = asyncio.create_task(publication_worker())
+    cleanup_task = asyncio.create_task(cleanup_worker())
     try:
         while True:
             try:
@@ -325,10 +351,13 @@ async def main():
     finally:
         report_task.cancel()
         publication_task.cancel()
+        cleanup_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await report_task
         with contextlib.suppress(asyncio.CancelledError):
             await publication_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await cleanup_task
 
 
 if __name__ == "__main__":

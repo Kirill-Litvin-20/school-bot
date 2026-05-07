@@ -61,6 +61,9 @@ from shared.database import (
     bind_teacher_telegram_id,
     log_admin_action,
     get_recent_admin_actions,
+    format_admin_action_log,
+    get_teacher_weekly_lessons_report,
+    format_teacher_weekly_report,
     get_recent_payment_history_by_telegram_user,
     build_daily_debt_report,
     get_students_by_teacher_telegram_id,
@@ -2515,35 +2518,48 @@ async def admin_actions_recent(callback: CallbackQuery):
         return
 
     rows = get_recent_admin_actions(30)
-    if not rows:
-        await callback.message.answer("Журнал действий пока пуст.")
-        await callback.answer()
-        return
-
-    lines = ["<b>Последние действия админов:</b>\n"]
-    for row in rows:
-        action_id, admin_id, action_type, target_type, target_id, details, status, created_at = row
-        lines.append(
-            f"#{action_id} | {created_at}\n"
-            f"admin: <code>{admin_id}</code>\n"
-            f"action: <b>{action_type}</b> ({status})\n"
-            f"target: {target_type if target_type else '-'}:{target_id if target_id else '-'}\n"
-            f"details: {details if details else '-'}\n"
-        )
+    text = format_admin_action_log(rows)
 
     chunks = []
-    current = []
-    current_len = 0
-    for line in lines:
-        line_len = len(line) + 1
-        if current_len + line_len > 3500 and current:
-            chunks.append("\n".join(current))
-            current = []
-            current_len = 0
-        current.append(line)
-        current_len += line_len
+    current = ""
+    for line in text.split("\n"):
+        if len(current) + len(line) + 1 > 3500:
+            if current:
+                chunks.append(current)
+            current = line
+        else:
+            current += ("\n" if current else "") + line
+
     if current:
-        chunks.append("\n".join(current))
+        chunks.append(current)
+
+    for chunk in chunks:
+        await callback.message.answer(chunk, parse_mode="HTML")
+
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "admin_teacher_lessons_report")
+async def admin_teacher_lessons_report(callback: CallbackQuery):
+    if not is_admin_role(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    rows = get_teacher_weekly_lessons_report()
+    text = format_teacher_weekly_report(rows, "за последние 7 дней")
+
+    chunks = []
+    current = ""
+    for line in text.split("\n"):
+        if len(current) + len(line) + 1 > 3500:
+            if current:
+                chunks.append(current)
+            current = line
+        else:
+            current += ("\n" if current else "") + line
+
+    if current:
+        chunks.append(current)
 
     for chunk in chunks:
         await callback.message.answer(chunk, parse_mode="HTML")
