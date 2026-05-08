@@ -1151,9 +1151,9 @@ async def admin_review_media(message: Message, state: FSMContext, bot: Bot):
             print(f"   File path on Telegram: {file.file_path}")
 
             # Download file using correct aiogram method
-            file_path = await bot.download(file, destination=target_path)
+            await bot.download(file, destination=target_path)
 
-            if file_path and file_path.exists():
+            if target_path.exists():
                 # Store as relative path for portability
                 media_local_path = f"assets/reviews/{filename}"
                 print(f"   ✅ Saved as: {media_local_path}")
@@ -1162,7 +1162,7 @@ async def admin_review_media(message: Message, state: FSMContext, bot: Bot):
                     f"✅ <b>Фото добавлено</b>\n"
                     f"📷 Фото сохранено локально\n"
                     f"🔗 Telegram ID: {media_file_id[:20]}...\n"
-                    f"💾 Размер: {file_path.stat().st_size / 1024:.1f} KB",
+                    f"💾 Размер: {target_path.stat().st_size / 1024:.1f} KB",
                     parse_mode="HTML"
                 )
             else:
@@ -1200,9 +1200,9 @@ async def admin_review_media(message: Message, state: FSMContext, bot: Bot):
             target_path = reviews_dir / filename
 
             file = await bot.get_file(media_file_id)
-            file_path = await bot.download(file, destination=target_path)
+            await bot.download(file, destination=target_path)
 
-            if file_path and file_path.exists():
+            if target_path.exists():
                 # Store as relative path for portability
                 media_local_path = f"assets/reviews/{filename}"
 
