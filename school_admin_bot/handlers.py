@@ -90,6 +90,8 @@ from shared.database import (
     upsert_known_telegram_user,
     create_publication_post,
     create_review_card,
+    get_active_review_cards,
+    deactivate_review_card,
     get_current_debtors_summary,
     get_debtor_student_details,
 )
@@ -1226,6 +1228,76 @@ async def admin_review_links(message: Message, state: FSMContext):
         parse_mode="HTML",
         reply_markup=get_admin_reply_menu(message.from_user.id),
     )
+
+
+@router.callback_query(lambda c: c.data == "admin_review_list")
+async def admin_review_list(callback: CallbackQuery):
+    """Показать список всех отзывов с опцией удаления"""
+    if not is_admin_role(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    reviews = get_active_review_cards(limit=100)
+    if not reviews:
+        await callback.message.answer("Нет активных отзывов.")
+        await callback.answer()
+        return
+
+    text = "<b>📋 Список отзывов:</b>\n\n"
+    for idx, review in enumerate(reviews, 1):
+        media_emoji = "📷" if review.get("media_type") == "photo" else "📄" if review.get("media_type") == "document" else ""
+        desc_preview = (review.get("description") or "")[:40]
+        text += f"{idx}. #{review['id']} {media_emoji}\n   <code>{desc_preview}...</code>\n"
+
+    await callback.message.answer(text, parse_mode="HTML")
+
+    # Кнопки удаления
+    buttons = []
+    for review in reviews[:10]:  # Максимум 10 кнопок в одном сообщении
+        buttons.append([InlineKeyboardButton(
+            text=f"🗑️ Удалить #{review['id']}",
+            callback_data=f"admin_delete_review_{review['id']}"
+        )])
+
+    if buttons:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await callback.message.answer("Выберите отзыв для удаления:", reply_markup=keyboard)
+
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("admin_delete_review_"))
+async def admin_delete_review(callback: CallbackQuery):
+    """Удалить отзыв"""
+    if not is_admin_role(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    try:
+        review_id = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка при удалении", show_alert=True)
+        return
+
+    success = deactivate_review_card(review_id)
+    if success:
+        log_admin_action(
+            admin_telegram_id=callback.from_user.id,
+            action_type="review_card_deleted",
+            target_type="review_card",
+            target_id=review_id,
+            details={},
+            status="success",
+        )
+        await callback.message.answer(
+            f"✅ Отзыв #{review_id} удалён.\n"
+            f"Он больше не будет виден ученикам.",
+            parse_mode="HTML"
+        )
+    else:
+        await callback.message.answer(f"❌ Не удалось удалить отзыв #{review_id}")
+
+    await callback.answer()
 
 
 @router.callback_query(lambda c: c.data == "admin_add_student")

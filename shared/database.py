@@ -3074,6 +3074,25 @@ def create_review_card(
     return review_id
 
 
+def deactivate_review_card(review_id: int) -> bool:
+    """Деактивировать отзыв (сделать невидимым для учеников)"""
+    conn = get_connection()
+    cur = conn.cursor()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cur.execute(
+        """
+        UPDATE review_cards
+        SET is_active = 0, updated_at = ?
+        WHERE id = ?
+        """,
+        (now, review_id),
+    )
+    conn.commit()
+    success = cur.rowcount > 0
+    conn.close()
+    return success
+
+
 def get_active_review_cards(limit: int = 200) -> list[dict]:
     conn = get_connection()
     cur = conn.cursor()
@@ -3105,12 +3124,15 @@ def get_active_review_cards(limit: int = 200) -> list[dict]:
                 links = []
         except Exception:
             links = []
+        media_type_raw = (row[3] or "").strip()
+        media_file_id_raw = row[2]
+
         result.append(
             {
                 "id": int(row[0]),
                 "description": (row[1] or "").strip(),
-                "media_file_id": row[2],
-                "media_type": (row[3] or "").strip() or None,
+                "media_file_id": media_file_id_raw if media_file_id_raw else None,
+                "media_type": media_type_raw if media_type_raw else None,
                 "links": [str(link).strip() for link in links if str(link).strip()][:8],
                 "created_at": row[5],
             }
