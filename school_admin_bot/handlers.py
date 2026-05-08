@@ -1166,6 +1166,16 @@ async def admin_review_links(message: Message, state: FSMContext):
         await message.answer("Сценарий создания отзыва сброшен. Запустите заново.")
         return
 
+    # Debug информация
+    debug_msg = (
+        f"📋 <b>DEBUG Отзыва:</b>\n"
+        f"• Описание: {len(description)} символов\n"
+        f"• media_file_id: {media_file_id[:20] + '...' if media_file_id else 'None'}\n"
+        f"• media_type: '{media_type}'\n"
+        f"• Ссылок: {len(links)}"
+    )
+    await message.answer(debug_msg, parse_mode="HTML")
+
     review_id = create_review_card(
         created_by=message.from_user.id,
         description=description,

@@ -335,8 +335,13 @@ async def send_review_card(message_obj: Message, index: int, state: FSMContext):
 
     media_type = review.get("media_type")
     media_ref = review.get("media_file_id")
+
+    # Debug
+    print(f"🔍 ОТЗЫВ #{review.get('id')}: media_type='{media_type}', media_ref={bool(media_ref)}")
+
     try:
         if media_type == "photo" and media_ref:
+            print(f"✅ Отправляем фото для отзыва #{review.get('id')}")
             photo = media_ref
             if isinstance(photo, str) and "/" in photo:
                 photo = FSInputFile(resolve_local_path(photo))
@@ -347,15 +352,19 @@ async def send_review_card(message_obj: Message, index: int, state: FSMContext):
             )
             return
         if media_type == "document" and media_ref:
+            print(f"✅ Отправляем документ для отзыва #{review.get('id')}")
             await message_obj.answer_document(
                 document=media_ref,
                 caption=caption,
                 reply_markup=get_review_card_keyboard(index, total),
             )
             return
+        else:
+            print(f"⏭️ Отзыв #{review.get('id')} без медиа (media_type={media_type}, media_ref={bool(media_ref)})")
     except Exception as e:
         import logging
-        logging.error(f"Error showing review media: {e}, media_type={media_type}, media_ref={media_ref}")
+        print(f"❌ Ошибка при отправке медиа для отзыва #{review.get('id')}: {e}")
+        logging.error(f"Error showing review media: {e}, media_type='{media_type}', media_ref={media_ref}")
 
     await message_obj.answer(
         caption,
