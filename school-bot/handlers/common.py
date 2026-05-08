@@ -331,8 +331,15 @@ async def send_review_card(message_obj: Message, index: int, state: FSMContext):
     media_ref = review.get("media_file_id")
     media_local = review.get("media_local_path")
 
-    # Debug
-    print(f"🔍 ОТЗЫВ #{review.get('id')}: media_type='{media_type}', has_local={bool(media_local)}, has_telegram_ref={bool(media_ref)}")
+    # Detailed debug logging
+    print(f"\n🔍 ОТЗЫВ #{review.get('id')}:")
+    print(f"   media_type: {media_type}")
+    print(f"   has_local_path: {bool(media_local)}")
+    if media_local:
+        print(f"   local_path: {media_local[:50]}...")
+    print(f"   has_telegram_id: {bool(media_ref)}")
+    if media_ref:
+        print(f"   telegram_id: {media_ref[:30]}...")
 
     # Try to send media if present (prioritize local files)
     if media_type and (media_local or media_ref):

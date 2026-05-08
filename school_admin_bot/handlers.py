@@ -1127,26 +1127,39 @@ async def admin_review_media(message: Message, state: FSMContext, bot: Bot):
         try:
             timestamp = int(time.time())
             filename = f"review_{timestamp}_{uuid4().hex[:8]}.jpg"
+            target_path = reviews_dir / filename
+
+            print(f"📥 Downloading photo to: {target_path}")
+            print(f"   File ID: {media_file_id[:30]}...")
 
             file = await bot.get_file(media_file_id)
-            file_path = await bot.download(file, destination=reviews_dir / filename)
+            print(f"   Got file object: {file}")
+
+            file_path = await bot.download(file, destination=target_path)
+            print(f"   Download result: {file_path}")
 
             if file_path:
                 media_local_path = str(file_path).replace(os.sep, "/")
+                print(f"   ✅ Saved as: {media_local_path}")
+            else:
+                print(f"   ⚠️ Download returned None")
 
             await message.answer(
                 f"✅ <b>Фото добавлено</b>\n"
                 f"📷 Фото сохранено локально\n"
-                f"🔗 Telegram ID: {media_file_id[:20]}...",
+                f"🔗 Telegram ID: {media_file_id[:20]}...\n"
+                f"💾 Путь: {media_local_path or 'не определён'}",
                 parse_mode="HTML"
             )
         except Exception as e:
-            # If local save fails, continue with Telegram file_id
-            logging.warning(f"Could not save photo locally: {e}")
+            print(f"❌ Error saving photo: {e}")
+            import traceback
+            traceback.print_exc()
+            logging.error(f"Could not save photo locally: {e}")
             await message.answer(
                 f"✅ <b>Фото добавлено</b>\n"
                 f"📷 Хранилище: Telegram\n"
-                f"⚠️ Локальное сохранение недоступно",
+                f"❌ Ошибка локального сохранения: {e}",
                 parse_mode="HTML"
             )
 
