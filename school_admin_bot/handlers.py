@@ -2291,15 +2291,22 @@ async def mark_student_attendance(callback: CallbackQuery):
         )
 
     status_text = "Был" if status == "present" else "Не был"
+    status_emoji = "✅" if status == "present" else "❌"
+
+    confirmation_text = (
+        f"{status_emoji} <b>Посещаемость отмечена</b>\n\n"
+        f"👤 <b>Ученик:</b> {student_name}\n"
+        f"📚 <b>Предмет:</b> {subject_name}\n"
+        f"👨‍🏫 <b>Преподаватель:</b> {teacher_name}\n"
+        f"📊 <b>Статус:</b> {status_text}\n"
+        f"💾 <b>Баланс был:</b> {lesson_balance_before}\n"
+        f"💾 <b>Баланс стал:</b> {lesson_balance_after}\n\n"
+        f"<i>Отметка сохранена в истории ✓</i>"
+    )
 
     await callback.message.answer(
-        f"✅ Посещаемость отмечена\n\n"
-        f"Ученик: {student_name}\n"
-        f"Предмет: {subject_name}\n"
-        f"Преподаватель: {teacher_name}\n"
-        f"Статус: {status_text}\n"
-        f"Баланс был: {lesson_balance_before}\n"
-        f"Баланс стал: {lesson_balance_after}",
+        confirmation_text,
+        parse_mode="HTML",
         reply_markup=get_admin_reply_menu(callback.from_user.id) if is_admin_role(callback.from_user.id) else get_teacher_menu()
     )
     await callback.answer()
