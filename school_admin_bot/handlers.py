@@ -1129,37 +1129,47 @@ async def admin_review_media(message: Message, state: FSMContext, bot: Bot):
             filename = f"review_{timestamp}_{uuid4().hex[:8]}.jpg"
             target_path = reviews_dir / filename
 
-            print(f"📥 Downloading photo to: {target_path}")
+            print(f"📥 Downloading photo...")
+            print(f"   Target: {target_path}")
             print(f"   File ID: {media_file_id[:30]}...")
 
+            # Get file from Telegram
             file = await bot.get_file(media_file_id)
-            print(f"   Got file object: {file}")
+            print(f"   File path on Telegram: {file.file_path}")
 
+            # Download file using correct aiogram method
             file_path = await bot.download(file, destination=target_path)
-            print(f"   Download result: {file_path}")
 
-            if file_path:
-                media_local_path = str(file_path).replace(os.sep, "/")
+            if file_path and file_path.exists():
+                # Store as relative path for portability
+                media_local_path = f"assets/reviews/{filename}"
                 print(f"   ✅ Saved as: {media_local_path}")
-            else:
-                print(f"   ⚠️ Download returned None")
 
-            await message.answer(
-                f"✅ <b>Фото добавлено</b>\n"
-                f"📷 Фото сохранено локально\n"
-                f"🔗 Telegram ID: {media_file_id[:20]}...\n"
-                f"💾 Путь: {media_local_path or 'не определён'}",
-                parse_mode="HTML"
-            )
+                await message.answer(
+                    f"✅ <b>Фото добавлено</b>\n"
+                    f"📷 Фото сохранено локально\n"
+                    f"🔗 Telegram ID: {media_file_id[:20]}...\n"
+                    f"💾 Размер: {file_path.stat().st_size / 1024:.1f} KB",
+                    parse_mode="HTML"
+                )
+            else:
+                media_local_path = None
+                await message.answer(
+                    f"✅ <b>Фото добавлено</b>\n"
+                    f"📷 Хранилище: Telegram\n"
+                    f"⚠️ Локальное сохранение не работает",
+                    parse_mode="HTML"
+                )
         except Exception as e:
             print(f"❌ Error saving photo: {e}")
             import traceback
             traceback.print_exc()
             logging.error(f"Could not save photo locally: {e}")
+            media_local_path = None
             await message.answer(
                 f"✅ <b>Фото добавлено</b>\n"
                 f"📷 Хранилище: Telegram\n"
-                f"❌ Ошибка локального сохранения: {e}",
+                f"⚠️ Локальное сохранение не работает",
                 parse_mode="HTML"
             )
 
@@ -1174,23 +1184,35 @@ async def admin_review_media(message: Message, state: FSMContext, bot: Bot):
             timestamp = int(time.time())
             file_ext = Path(document.file_name or "document.pdf").suffix
             filename = f"review_{timestamp}_{uuid4().hex[:8]}{file_ext}"
+            target_path = reviews_dir / filename
 
             file = await bot.get_file(media_file_id)
-            file_path = await bot.download(file, destination=reviews_dir / filename)
+            file_path = await bot.download(file, destination=target_path)
 
-            if file_path:
-                media_local_path = str(file_path).replace(os.sep, "/")
+            if file_path and file_path.exists():
+                # Store as relative path for portability
+                media_local_path = f"assets/reviews/{filename}"
 
-            await message.answer(
-                f"✅ <b>Файл добавлен</b>\n"
-                f"📄 {document.file_name or 'документ'}\n"
-                f"💾 Размер: {document.file_size / 1024:.1f} KB\n"
-                f"✅ Сохранено локально",
-                parse_mode="HTML"
-            )
+                await message.answer(
+                    f"✅ <b>Файл добавлен</b>\n"
+                    f"📄 {document.file_name or 'документ'}\n"
+                    f"💾 Размер: {document.file_size / 1024:.1f} KB\n"
+                    f"✅ Сохранено локально",
+                    parse_mode="HTML"
+                )
+            else:
+                media_local_path = None
+                await message.answer(
+                    f"✅ <b>Файл добавлен</b>\n"
+                    f"📄 {document.file_name or 'документ'}\n"
+                    f"💾 Размер: {document.file_size / 1024:.1f} KB\n"
+                    f"⚠️ Хранилище: Telegram",
+                    parse_mode="HTML"
+                )
         except Exception as e:
             # If local save fails, continue with Telegram file_id
             logging.warning(f"Could not save document locally: {e}")
+            media_local_path = None
             await message.answer(
                 f"✅ <b>Файл добавлен</b>\n"
                 f"📄 {document.file_name or 'документ'}\n"
@@ -1317,15 +1339,19 @@ async def admin_review_links(message: Message, state: FSMContext):
     try:
         if media_local_path and media_type == "photo":
             from aiogram.types import FSInputFile
+            # Convert relative path to absolute for FSInputFile
+            abs_path = resolve_local_path(media_local_path)
             await message.answer_photo(
-                photo=FSInputFile(media_local_path),
+                photo=FSInputFile(abs_path),
                 caption=caption,
                 parse_mode="HTML"
             )
         elif media_local_path and media_type == "document":
             from aiogram.types import FSInputFile
+            # Convert relative path to absolute for FSInputFile
+            abs_path = resolve_local_path(media_local_path)
             await message.answer_document(
-                document=FSInputFile(media_local_path),
+                document=FSInputFile(abs_path),
                 caption=caption,
                 parse_mode="HTML"
             )

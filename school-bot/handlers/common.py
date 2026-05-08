@@ -37,6 +37,38 @@ def resolve_local_path(path_value: str) -> str:
     return str((BOT_DIR / path).resolve())
 
 
+def resolve_review_media(media_type: str | None, media_local_path: str | None, media_file_id: str | None):
+    """
+    Resolve review media for display.
+
+    Returns:
+    - FSInputFile object if local file exists
+    - Telegram file_id string if local doesn't exist but file_id available
+    - None if no media available
+    """
+    import logging
+
+    # Try local file first (permanent storage)
+    if media_local_path:
+        try:
+            abs_path = resolve_local_path(media_local_path)
+            resolved_path = Path(abs_path)
+            if resolved_path.exists():
+                return FSInputFile(abs_path)
+            else:
+                logging.warning(f"Local media file not found: {media_local_path}")
+        except Exception as e:
+            logging.warning(f"Error resolving local media path '{media_local_path}': {e}")
+
+    # Fallback to Telegram file_id (temporary storage)
+    if media_file_id:
+        logging.debug(f"Falling back to Telegram file_id (local path unavailable)")
+        return media_file_id
+
+    # No media available
+    return None
+
+
 def get_teacher_cards_for_subject(subject: str) -> list[dict]:
     normalized: list[dict] = []
 
@@ -331,48 +363,28 @@ async def send_review_card(message_obj: Message, index: int, state: FSMContext):
     media_ref = review.get("media_file_id")
     media_local = review.get("media_local_path")
 
-    # Detailed debug logging
-    print(f"\n🔍 ОТЗЫВ #{review.get('id')}:")
-    print(f"   media_type: {media_type}")
-    print(f"   has_local_path: {bool(media_local)}")
-    if media_local:
-        print(f"   local_path: {media_local[:50]}...")
-    print(f"   has_telegram_id: {bool(media_ref)}")
-    if media_ref:
-        print(f"   telegram_id: {media_ref[:30]}...")
-
-    # Try to send media if present (prioritize local files)
-    if media_type and (media_local or media_ref):
+    # Try to send media if present using resolved media
+    if media_type:
         try:
-            if media_type == "photo":
-                print(f"✅ Отправляем фото для отзыва #{review.get('id')}")
-                photo = media_local if media_local else media_ref
-                if isinstance(photo, str) and "/" in photo:
-                    photo = FSInputFile(resolve_local_path(photo))
+            media = resolve_review_media(media_type, media_local, media_ref)
+
+            if media_type == "photo" and media:
                 await message_obj.answer_photo(
-                    photo=photo,
+                    photo=media,
                     caption=caption,
                     reply_markup=get_review_card_keyboard(index, total),
                 )
                 return
-            elif media_type == "document":
-                print(f"✅ Отправляем документ для отзыва #{review.get('id')}")
-                document = media_local if media_local else media_ref
-                if isinstance(document, str) and "/" in document:
-                    document = FSInputFile(resolve_local_path(document))
+            elif media_type == "document" and media:
                 await message_obj.answer_document(
-                    document=document,
+                    document=media,
                     caption=caption,
                     reply_markup=get_review_card_keyboard(index, total),
                 )
                 return
         except Exception as e:
             import logging
-            print(f"❌ Ошибка при отправке медиа для отзыва #{review.get('id')}: {e}")
-            print(f"   media_type: {media_type}, local: {bool(media_local)}, telegram: {bool(media_ref)}")
-            logging.error(f"Error showing review media: {e}, media_type='{media_type}', has_local={bool(media_local)}")
-    else:
-        print(f"⏭️ Отзыв #{review.get('id')} без медиа (media_type={media_type}, local={bool(media_local)}, telegram={bool(media_ref)})")
+            logging.error(f"Error showing review media: {e}, media_type='{media_type}'")
 
     # Fallback: send text only
     await message_obj.answer(
@@ -403,30 +415,26 @@ async def edit_review_card(callback: CallbackQuery, index: int, state: FSMContex
     media_ref = review.get("media_file_id")
     media_local = review.get("media_local_path")
 
-    # Try to edit with media if present (prioritize local files)
-    if media_type and (media_local or media_ref):
+    # Try to edit with media if present using resolved media
+    if media_type:
         try:
-            if media_type == "photo":
-                photo = media_local if media_local else media_ref
-                if isinstance(photo, str) and "/" in photo:
-                    photo = FSInputFile(resolve_local_path(photo))
+            media = resolve_review_media(media_type, media_local, media_ref)
+
+            if media_type == "photo" and media:
                 await callback.message.edit_media(
-                    media=InputMediaPhoto(media=photo, caption=caption),
+                    media=InputMediaPhoto(media=media, caption=caption),
                     reply_markup=get_review_card_keyboard(index, total),
                 )
                 return
-            elif media_type == "document":
-                document = media_local if media_local else media_ref
-                if isinstance(document, str) and "/" in document:
-                    document = FSInputFile(resolve_local_path(document))
+            elif media_type == "document" and media:
                 await callback.message.edit_media(
-                    media=InputMediaDocument(media=document, caption=caption),
+                    media=InputMediaDocument(media=media, caption=caption),
                     reply_markup=get_review_card_keyboard(index, total),
                 )
                 return
         except Exception as e:
             import logging
-            logging.error(f"Error editing review media: {e}, media_type='{media_type}', has_local={bool(media_local)}")
+            logging.error(f"Error editing review media: {e}, media_type='{media_type}'")
 
     # Fallback: edit text only
     await callback.message.edit_text(
