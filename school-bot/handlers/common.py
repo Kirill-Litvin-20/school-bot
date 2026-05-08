@@ -59,6 +59,7 @@ def get_teacher_cards_for_subject(subject: str) -> list[dict]:
 def get_review_cards() -> list[dict]:
     cards: list[dict] = []
 
+    # Load only from database (respects is_active flag for proper deletion)
     for card in get_active_review_cards(limit=500):
         cards.append(
             {
@@ -66,20 +67,13 @@ def get_review_cards() -> list[dict]:
                 "description": card.get("description") or "Отзыв",
                 "media_type": card.get("media_type"),
                 "media_file_id": card.get("media_file_id"),
+                "media_local_path": card.get("media_local_path"),
                 "links": card.get("links") or [],
             }
         )
 
-    for item in load_reviews_from_folder():
-        cards.append(
-            {
-                "id": None,
-                "description": "Отзыв ученика",
-                "media_type": "photo",
-                "media_file_id": item.get("image"),
-                "links": [],
-            }
-        )
+    # Note: Folder-based reviews removed - use database for all review management
+    # This ensures deleted reviews are properly hidden (is_active=0)
 
     return cards
 

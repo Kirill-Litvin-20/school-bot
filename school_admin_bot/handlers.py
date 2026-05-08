@@ -1118,53 +1118,31 @@ async def admin_review_media(message: Message, state: FSMContext, bot: Bot):
     reviews_dir.mkdir(parents=True, exist_ok=True)
 
     if message.photo:
-        try:
-            photo = message.photo[-1]
-            media_file_id = photo.file_id
-            media_type = "photo"
+        photo = message.photo[-1]
+        media_file_id = photo.file_id
+        media_type = "photo"
+        media_local_path = None  # Will use Telegram file_id for storage
 
-            # Download and save photo
-            timestamp = int(time.time())
-            filename = f"review_{timestamp}_{uuid4().hex[:8]}.jpg"
-            file_path = reviews_dir / filename
-
-            await bot.download(photo, destination=file_path)
-            media_local_path = str(file_path).replace(os.sep, "/")
-
-            await message.answer(
-                f"✅ <b>Фото добавлено</b>\n"
-                f"📷 Файл сохранён локально\n"
-                f"🔗 ID Telegram: {media_file_id[:20]}...",
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            await message.answer(f"❌ Ошибка при сохранении фото: {e}")
-            return
+        await message.answer(
+            f"✅ <b>Фото добавлено</b>\n"
+            f"📷 Хранилище: Telegram\n"
+            f"🔗 ID: {media_file_id[:20]}...",
+            parse_mode="HTML"
+        )
 
     elif message.document:
-        try:
-            document = message.document
-            media_file_id = document.file_id
-            media_type = "document"
+        document = message.document
+        media_file_id = document.file_id
+        media_type = "document"
+        media_local_path = None  # Will use Telegram file_id for storage
 
-            # Download and save document
-            timestamp = int(time.time())
-            file_ext = Path(document.file_name or "document.pdf").suffix
-            filename = f"review_{timestamp}_{uuid4().hex[:8]}{file_ext}"
-            file_path = reviews_dir / filename
-
-            await bot.download(document, destination=file_path)
-            media_local_path = str(file_path).replace(os.sep, "/")
-
-            await message.answer(
-                f"✅ <b>Файл добавлен</b>\n"
-                f"📄 {document.file_name or 'документ'}\n"
-                f"💾 Размер: {document.file_size / 1024:.1f} KB",
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            await message.answer(f"❌ Ошибка при сохранении файла: {e}")
-            return
+        await message.answer(
+            f"✅ <b>Файл добавлен</b>\n"
+            f"📄 {document.file_name or 'документ'}\n"
+            f"💾 Размер: {document.file_size / 1024:.1f} KB\n"
+            f"🔗 Хранилище: Telegram",
+            parse_mode="HTML"
+        )
 
     elif text_value == "-" or text_value == "нет":
         media_file_id = None
