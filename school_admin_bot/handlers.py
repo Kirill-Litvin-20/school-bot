@@ -1107,7 +1107,7 @@ async def admin_review_description(message: Message, state: FSMContext):
 
 
 @router.message(AdminStates.waiting_review_media)
-async def admin_review_media(message: Message, state: FSMContext):
+async def admin_review_media(message: Message, state: FSMContext, bot: Bot):
     media_file_id = None
     media_type = None
     media_local_path = None
@@ -1128,7 +1128,7 @@ async def admin_review_media(message: Message, state: FSMContext):
             filename = f"review_{timestamp}_{uuid4().hex[:8]}.jpg"
             file_path = reviews_dir / filename
 
-            await message.bot.download(photo, destination=file_path)
+            await bot.download(photo, destination=file_path)
             media_local_path = str(file_path).replace(os.sep, "/")
 
             await message.answer(
@@ -1153,7 +1153,7 @@ async def admin_review_media(message: Message, state: FSMContext):
             filename = f"review_{timestamp}_{uuid4().hex[:8]}{file_ext}"
             file_path = reviews_dir / filename
 
-            await message.bot.download(document, destination=file_path)
+            await bot.download(document, destination=file_path)
             media_local_path = str(file_path).replace(os.sep, "/")
 
             await message.answer(
