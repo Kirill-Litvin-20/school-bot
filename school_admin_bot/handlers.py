@@ -786,7 +786,7 @@ async def superadmin_section_users(callback: CallbackQuery):
     if callback.from_user.id not in SUPERADMINS:
         await callback.answer("Нет доступа", show_alert=True)
         return
-    await callback.message.answer("Раздел: управление пользователями.", reply_markup=get_superadmin_users_menu())
+    await callback.message.answer("👥 <b>Управление пользователями</b>\n\nВыберите действие:", reply_markup=get_superadmin_users_menu(), parse_mode="HTML")
     await callback.answer()
 
 
@@ -795,7 +795,7 @@ async def superadmin_section_school(callback: CallbackQuery):
     if callback.from_user.id not in SUPERADMINS:
         await callback.answer("Нет доступа", show_alert=True)
         return
-    await callback.message.answer("Раздел: учебный процесс.", reply_markup=get_superadmin_school_menu())
+    await callback.message.answer("📚 <b>Учебный процесс</b>\n\nВыберите действие:", reply_markup=get_superadmin_school_menu(), parse_mode="HTML")
     await callback.answer()
 
 
@@ -804,7 +804,7 @@ async def superadmin_section_reports(callback: CallbackQuery):
     if callback.from_user.id not in SUPERADMINS:
         await callback.answer("Нет доступа", show_alert=True)
         return
-    await callback.message.answer("Раздел: отчеты и журнал.", reply_markup=get_superadmin_reports_menu())
+    await callback.message.answer("📊 <b>Отчеты и журнал</b>\n\nВыберите действие:", reply_markup=get_superadmin_reports_menu(), parse_mode="HTML")
     await callback.answer()
 
 
@@ -813,7 +813,7 @@ async def superadmin_back_main(callback: CallbackQuery):
     if callback.from_user.id not in SUPERADMINS:
         await callback.answer("Нет доступа", show_alert=True)
         return
-    await callback.message.answer("Главное меню супер-администратора.", reply_markup=get_superadmin_menu())
+    await callback.message.answer("🔐 <b>Главное меню супер-администратора</b>\n\nВыберите раздел:", reply_markup=get_superadmin_menu(), parse_mode="HTML")
     await callback.answer()
 
 

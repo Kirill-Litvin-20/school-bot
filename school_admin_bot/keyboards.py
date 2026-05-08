@@ -4,9 +4,9 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 def get_superadmin_menu():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Пользователи", callback_data="superadmin_section_users")],
-            [InlineKeyboardButton(text="Учебный процесс", callback_data="superadmin_section_school")],
-            [InlineKeyboardButton(text="Отчеты и журнал", callback_data="superadmin_section_reports")],
+            [InlineKeyboardButton(text="👥 Пользователи", callback_data="superadmin_section_users")],
+            [InlineKeyboardButton(text="📚 Учебный процесс", callback_data="superadmin_section_school")],
+            [InlineKeyboardButton(text="📊 Отчеты и журнал", callback_data="superadmin_section_reports")],
         ]
     )
 
@@ -14,14 +14,14 @@ def get_superadmin_menu():
 def get_superadmin_users_menu():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Добавить администратора", callback_data="superadmin_add_admin")],
-            [InlineKeyboardButton(text="Добавить преподавателя", callback_data="superadmin_add_teacher")],
-            [InlineKeyboardButton(text="Редактировать карточку преподавателя", callback_data="superadmin_edit_teacher")],
-            [InlineKeyboardButton(text="Изменить роль пользователя", callback_data="superadmin_change_role")],
-            [InlineKeyboardButton(text="Удалить пользователя", callback_data="admin_delete_user")],
-            [InlineKeyboardButton(text="Список администраторов", callback_data="superadmin_list_admins")],
-            [InlineKeyboardButton(text="Список преподавателей", callback_data="superadmin_list_teachers")],
-            [InlineKeyboardButton(text="Назад", callback_data="superadmin_back_main")],
+            [InlineKeyboardButton(text="👤 Добавить администратора", callback_data="superadmin_add_admin")],
+            [InlineKeyboardButton(text="👨‍🏫 Добавить преподавателя", callback_data="superadmin_add_teacher")],
+            [InlineKeyboardButton(text="✏️ Редактировать карточку преподавателя", callback_data="superadmin_edit_teacher")],
+            [InlineKeyboardButton(text="🔄 Изменить роль пользователя", callback_data="superadmin_change_role")],
+            [InlineKeyboardButton(text="🗑️ Удалить пользователя", callback_data="admin_delete_user")],
+            [InlineKeyboardButton(text="📋 Список администраторов", callback_data="superadmin_list_admins")],
+            [InlineKeyboardButton(text="📋 Список преподавателей", callback_data="superadmin_list_teachers")],
+            [InlineKeyboardButton(text="← Назад", callback_data="superadmin_back_main")],
         ]
     )
 
@@ -29,18 +29,18 @@ def get_superadmin_users_menu():
 def get_superadmin_school_menu():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Добавить ученика", callback_data="admin_add_student")],
-            [InlineKeyboardButton(text="Публикация ученикам", callback_data="admin_publication_new")],
-            [InlineKeyboardButton(text="Сообщение в чат оплат", callback_data="admin_payment_chat_message")],
-            [InlineKeyboardButton(text="Добавить карточку отзыва", callback_data="admin_review_new")],
+            [InlineKeyboardButton(text="👶 Добавить ученика", callback_data="admin_add_student")],
+            [InlineKeyboardButton(text="📢 Публикация ученикам", callback_data="admin_publication_new")],
+            [InlineKeyboardButton(text="💬 Сообщение в чат оплат", callback_data="admin_payment_chat_message")],
+            [InlineKeyboardButton(text="📝 Добавить карточку отзыва", callback_data="admin_review_new")],
             [InlineKeyboardButton(text="📋 Список отзывов", callback_data="admin_review_list")],
-            [InlineKeyboardButton(text="Назначить предмет/преподавателя", callback_data="admin_assign_lesson")],
-            [InlineKeyboardButton(text="Привязать Telegram преподавателя", callback_data="admin_bind_teacher_telegram")],
-            [InlineKeyboardButton(text="Найти ученика", callback_data="admin_find_student")],
-            [InlineKeyboardButton(text="Корректировка баланса", callback_data="admin_add_balance")],
-            [InlineKeyboardButton(text="Посещаемость", callback_data="admin_attendance")],
-            [InlineKeyboardButton(text="История баланса", callback_data="admin_balance_history")],
-            [InlineKeyboardButton(text="Назад", callback_data="superadmin_back_main")],
+            [InlineKeyboardButton(text="✏️ Назначить предмет/преподавателя", callback_data="admin_assign_lesson")],
+            [InlineKeyboardButton(text="📱 Привязать Telegram преподавателя", callback_data="admin_bind_teacher_telegram")],
+            [InlineKeyboardButton(text="🔍 Найти ученика", callback_data="admin_find_student")],
+            [InlineKeyboardButton(text="💳 Корректировка баланса", callback_data="admin_add_balance")],
+            [InlineKeyboardButton(text="✅ Посещаемость", callback_data="admin_attendance")],
+            [InlineKeyboardButton(text="📜 История баланса", callback_data="admin_balance_history")],
+            [InlineKeyboardButton(text="← Назад", callback_data="superadmin_back_main")],
         ]
     )
 
@@ -48,10 +48,10 @@ def get_superadmin_school_menu():
 def get_superadmin_reports_menu():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Отчет по долгам", callback_data="admin_debt_report")],
-            [InlineKeyboardButton(text="Занятия преподавателей", callback_data="admin_teacher_lessons_report")],
-            [InlineKeyboardButton(text="Журнал действий", callback_data="admin_actions_recent")],
-            [InlineKeyboardButton(text="Назад", callback_data="superadmin_back_main")],
+            [InlineKeyboardButton(text="📊 Отчет по долгам", callback_data="admin_debt_report")],
+            [InlineKeyboardButton(text="👨‍🏫 Занятия преподавателей", callback_data="admin_teacher_lessons_report")],
+            [InlineKeyboardButton(text="📋 Журнал действий", callback_data="admin_actions_recent")],
+            [InlineKeyboardButton(text="← Назад", callback_data="superadmin_back_main")],
         ]
     )
 
