@@ -1121,28 +1121,70 @@ async def admin_review_media(message: Message, state: FSMContext, bot: Bot):
         photo = message.photo[-1]
         media_file_id = photo.file_id
         media_type = "photo"
-        media_local_path = None  # Will use Telegram file_id for storage
+        media_local_path = None
 
-        await message.answer(
-            f"✅ <b>Фото добавлено</b>\n"
-            f"📷 Хранилище: Telegram\n"
-            f"🔗 ID: {media_file_id[:20]}...",
-            parse_mode="HTML"
-        )
+        # Download and save photo
+        try:
+            timestamp = int(time.time())
+            filename = f"review_{timestamp}_{uuid4().hex[:8]}.jpg"
+
+            file = await bot.get_file(media_file_id)
+            file_path = await bot.download(file, destination=reviews_dir / filename)
+
+            if file_path:
+                media_local_path = str(file_path).replace(os.sep, "/")
+
+            await message.answer(
+                f"✅ <b>Фото добавлено</b>\n"
+                f"📷 Фото сохранено локально\n"
+                f"🔗 Telegram ID: {media_file_id[:20]}...",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            # If local save fails, continue with Telegram file_id
+            logging.warning(f"Could not save photo locally: {e}")
+            await message.answer(
+                f"✅ <b>Фото добавлено</b>\n"
+                f"📷 Хранилище: Telegram\n"
+                f"⚠️ Локальное сохранение недоступно",
+                parse_mode="HTML"
+            )
 
     elif message.document:
         document = message.document
         media_file_id = document.file_id
         media_type = "document"
-        media_local_path = None  # Will use Telegram file_id for storage
+        media_local_path = None
 
-        await message.answer(
-            f"✅ <b>Файл добавлен</b>\n"
-            f"📄 {document.file_name or 'документ'}\n"
-            f"💾 Размер: {document.file_size / 1024:.1f} KB\n"
-            f"🔗 Хранилище: Telegram",
-            parse_mode="HTML"
-        )
+        # Download and save document
+        try:
+            timestamp = int(time.time())
+            file_ext = Path(document.file_name or "document.pdf").suffix
+            filename = f"review_{timestamp}_{uuid4().hex[:8]}{file_ext}"
+
+            file = await bot.get_file(media_file_id)
+            file_path = await bot.download(file, destination=reviews_dir / filename)
+
+            if file_path:
+                media_local_path = str(file_path).replace(os.sep, "/")
+
+            await message.answer(
+                f"✅ <b>Файл добавлен</b>\n"
+                f"📄 {document.file_name or 'документ'}\n"
+                f"💾 Размер: {document.file_size / 1024:.1f} KB\n"
+                f"✅ Сохранено локально",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            # If local save fails, continue with Telegram file_id
+            logging.warning(f"Could not save document locally: {e}")
+            await message.answer(
+                f"✅ <b>Файл добавлен</b>\n"
+                f"📄 {document.file_name or 'документ'}\n"
+                f"💾 Размер: {document.file_size / 1024:.1f} KB\n"
+                f"⚠️ Хранилище: Telegram",
+                parse_mode="HTML"
+            )
 
     elif text_value == "-" or text_value == "нет":
         media_file_id = None
