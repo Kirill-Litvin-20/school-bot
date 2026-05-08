@@ -1107,16 +1107,28 @@ async def admin_review_description(message: Message, state: FSMContext):
 async def admin_review_media(message: Message, state: FSMContext):
     media_file_id = None
     media_type = None
-    text_value = (message.text or "").strip()
+    text_value = (message.text or "").strip().lower()
 
     if message.photo:
         media_file_id = message.photo[-1].file_id
         media_type = "photo"
+        await message.answer("✅ Фото успешно загружено для отзыва")
     elif message.document:
         media_file_id = message.document.file_id
         media_type = "document"
-    elif text_value != "-":
-        await message.answer("Отправьте фото/файл или символ -, чтобы пропустить.")
+        await message.answer("✅ Файл успешно загружен для отзыва")
+    elif text_value == "-" or text_value == "нет":
+        media_file_id = None
+        media_type = None
+        await message.answer("⏭️ Продолжаем без медиа")
+    else:
+        await message.answer(
+            "❌ Ошибка!\n\n"
+            "Пожалуйста, отправьте:\n"
+            "📷 Фото ИЛИ\n"
+            "📄 Файл (PDF) ИЛИ\n"
+            "Введите: - (чтобы пропустить)"
+        )
         return
 
     await state.update_data(review_media_file_id=media_file_id, review_media_type=media_type)
@@ -1180,6 +1192,12 @@ async def admin_review_links(message: Message, state: FSMContext):
         f"{build_links_block(links)}"
     )
 
+    media_status = ""
+    if media_file_id and media_type == "photo":
+        media_status = " (📷 с фото)"
+    elif media_file_id and media_type == "document":
+        media_status = " (📄 с файлом)"
+
     try:
         if media_file_id and media_type == "photo":
             await message.answer_photo(photo=media_file_id, caption=caption, parse_mode="HTML")
@@ -1187,12 +1205,15 @@ async def admin_review_links(message: Message, state: FSMContext):
             await message.answer_document(document=media_file_id, caption=caption, parse_mode="HTML")
         else:
             await message.answer(caption, parse_mode="HTML")
-    except Exception:
+    except Exception as e:
         await message.answer(caption, parse_mode="HTML")
+        media_status += f" ⚠️ (не удалось загрузить медиа)"
 
     await state.clear()
     await message.answer(
-        "Карточка отзыва создана и будет отображаться ученикам в разделе «Отзывы».",
+        f"✅ <b>Карточка отзыва #{review_id} создана</b>{media_status}\n\n"
+        f"Отзыв будет отображаться ученикам в разделе «⭐ Отзывы»",
+        parse_mode="HTML",
         reply_markup=get_admin_reply_menu(message.from_user.id),
     )
 

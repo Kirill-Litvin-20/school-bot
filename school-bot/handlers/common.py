@@ -353,8 +353,9 @@ async def send_review_card(message_obj: Message, index: int, state: FSMContext):
                 reply_markup=get_review_card_keyboard(index, total),
             )
             return
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.error(f"Error showing review media: {e}, media_type={media_type}, media_ref={media_ref}")
 
     await message_obj.answer(
         caption,
