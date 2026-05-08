@@ -31,6 +31,10 @@ from keyboards import (
     get_superadmin_school_menu,
     get_superadmin_reports_menu,
     get_admin_menu,
+    get_admin_management_menu,
+    get_admin_education_menu,
+    get_admin_finance_menu,
+    get_admin_reports_menu,
     get_teacher_menu,
     get_student_menu,
     get_tariff_keyboard,
@@ -692,8 +696,9 @@ async def start_handler(message: Message, state: FSMContext):
             )
 
         await message.answer(
-            "Внутренний бот школы.\n\nТы вошел как главный админ.",
-            reply_markup=get_superadmin_menu()
+            "🔐 <b>Главное меню супер-администратора</b>\n\nДобро пожаловать во внутренний бот школы. Выберите раздел:",
+            reply_markup=get_superadmin_menu(),
+            parse_mode="HTML"
         )
         return
 
@@ -711,9 +716,10 @@ async def start_handler(message: Message, state: FSMContext):
             )
             mark_onboarding_invite_used(invite_id=int(invite_id), telegram_id=user_id)
             await message.answer(
-                "Доступ администратора активирован.\n\n"
-                "Добро пожаловать во внутренний бот школы.",
+                "✅ <b>Доступ активирован</b>\n\n"
+                "⚙️ <b>Админ-панель</b>\n\nДобро пожаловать во внутренний бот школы. Выберите раздел:",
                 reply_markup=get_admin_menu(),
+                parse_mode="HTML"
             )
             return
 
@@ -728,8 +734,9 @@ async def start_handler(message: Message, state: FSMContext):
 
     if role == "admin":
         await message.answer(
-            "Внутренний бот школы.\n\nТы вошел как админ.",
-            reply_markup=get_admin_menu()
+            "⚙️ <b>Админ-панель</b>\n\nДобро пожаловать во внутренний бот школы. Выберите раздел:",
+            reply_markup=get_admin_menu(),
+            parse_mode="HTML"
         )
         return
 
@@ -763,7 +770,14 @@ async def menu_home(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer("Доступ не найден. Используйте /start для повторного входа.")
         await callback.answer()
         return
-    await callback.message.answer("Главное меню.", reply_markup=menu)
+    # Show different messages for different user types
+    if callback.from_user.id in SUPERADMINS:
+        message_text = "🔐 <b>Главное меню супер-администратора</b>\n\nВыберите раздел:"
+    elif is_admin_role(callback.from_user.id):
+        message_text = "⚙️ <b>Админ-панель</b>\n\nВыберите раздел:"
+    else:
+        message_text = "📋 <b>Главное меню</b>\n\nВыберите действие:"
+    await callback.message.answer(message_text, reply_markup=menu, parse_mode="HTML")
     await callback.answer()
 
 
@@ -800,6 +814,51 @@ async def superadmin_back_main(callback: CallbackQuery):
         await callback.answer("Нет доступа", show_alert=True)
         return
     await callback.message.answer("Главное меню супер-администратора.", reply_markup=get_superadmin_menu())
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "admin_section_management")
+async def admin_section_management(callback: CallbackQuery):
+    if not is_admin_role(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.message.answer("👥 <b>Управление пользователями</b>\n\nВыберите действие:", reply_markup=get_admin_management_menu(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "admin_section_education")
+async def admin_section_education(callback: CallbackQuery):
+    if not is_admin_role(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.message.answer("📚 <b>Учеба и занятия</b>\n\nВыберите действие:", reply_markup=get_admin_education_menu(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "admin_section_finance")
+async def admin_section_finance(callback: CallbackQuery):
+    if not is_admin_role(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.message.answer("💰 <b>Финансы и баланс</b>\n\nВыберите действие:", reply_markup=get_admin_finance_menu(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "admin_section_reports")
+async def admin_section_reports(callback: CallbackQuery):
+    if not is_admin_role(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.message.answer("📊 <b>Отчеты и аналитика</b>\n\nВыберите действие:", reply_markup=get_admin_reports_menu(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "admin_back_main")
+async def admin_back_main(callback: CallbackQuery):
+    if not is_admin_role(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.message.answer("⚙️ <b>Админ-панель</b>\n\nВыберите раздел:", reply_markup=get_admin_menu(), parse_mode="HTML")
     await callback.answer()
 
 

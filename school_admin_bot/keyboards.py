@@ -59,20 +59,56 @@ def get_superadmin_reports_menu():
 def get_admin_menu():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Добавить ученика", callback_data="admin_add_student")],
-            [InlineKeyboardButton(text="Публикация ученикам", callback_data="admin_publication_new")],
-            [InlineKeyboardButton(text="Сообщение в чат оплат", callback_data="admin_payment_chat_message")],
-            [InlineKeyboardButton(text="Добавить карточку отзыва", callback_data="admin_review_new")],
+            [InlineKeyboardButton(text="👥 Управление", callback_data="admin_section_management")],
+            [InlineKeyboardButton(text="📚 Учеба", callback_data="admin_section_education")],
+            [InlineKeyboardButton(text="💰 Финансы", callback_data="admin_section_finance")],
+            [InlineKeyboardButton(text="📊 Отчеты", callback_data="admin_section_reports")],
+        ]
+    )
+
+
+def get_admin_management_menu():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="👶 Добавить ученика", callback_data="admin_add_student")],
+            [InlineKeyboardButton(text="🔍 Найти ученика", callback_data="admin_find_student")],
+            [InlineKeyboardButton(text="🗑️ Удалить пользователя", callback_data="admin_delete_user")],
+            [InlineKeyboardButton(text="📱 Привязать Telegram преподавателя", callback_data="admin_bind_teacher_telegram")],
+            [InlineKeyboardButton(text="← Назад", callback_data="admin_back_main")],
+        ]
+    )
+
+
+def get_admin_education_menu():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✏️ Назначить предмет/преподавателя", callback_data="admin_assign_lesson")],
+            [InlineKeyboardButton(text="✅ Посещаемость", callback_data="admin_attendance")],
+            [InlineKeyboardButton(text="📝 Добавить карточку отзыва", callback_data="admin_review_new")],
             [InlineKeyboardButton(text="📋 Список отзывов", callback_data="admin_review_list")],
-            [InlineKeyboardButton(text="Назначить предмет/преподавателя", callback_data="admin_assign_lesson")],
-            [InlineKeyboardButton(text="Привязать Telegram преподавателя", callback_data="admin_bind_teacher_telegram")],
-            [InlineKeyboardButton(text="Удалить преподавателя/ученика", callback_data="admin_delete_user")],
-            [InlineKeyboardButton(text="Найти ученика", callback_data="admin_find_student")],
-            [InlineKeyboardButton(text="Корректировка баланса", callback_data="admin_add_balance")],
-            [InlineKeyboardButton(text="Посещаемость", callback_data="admin_attendance")],
-            [InlineKeyboardButton(text="История баланса", callback_data="admin_balance_history")],
-            [InlineKeyboardButton(text="Отчет по долгам", callback_data="admin_debt_report")],
-            [InlineKeyboardButton(text="Журнал действий", callback_data="admin_actions_recent")],
+            [InlineKeyboardButton(text="← Назад", callback_data="admin_back_main")],
+        ]
+    )
+
+
+def get_admin_finance_menu():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Корректировка баланса", callback_data="admin_add_balance")],
+            [InlineKeyboardButton(text="📜 История баланса", callback_data="admin_balance_history")],
+            [InlineKeyboardButton(text="💬 Сообщение в чат оплат", callback_data="admin_payment_chat_message")],
+            [InlineKeyboardButton(text="← Назад", callback_data="admin_back_main")],
+        ]
+    )
+
+
+def get_admin_reports_menu():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Отчет по долгам", callback_data="admin_debt_report")],
+            [InlineKeyboardButton(text="📋 Журнал действий", callback_data="admin_actions_recent")],
+            [InlineKeyboardButton(text="📢 Публикация ученикам", callback_data="admin_publication_new")],
+            [InlineKeyboardButton(text="← Назад", callback_data="admin_back_main")],
         ]
     )
 
