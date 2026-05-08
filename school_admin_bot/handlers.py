@@ -5,6 +5,7 @@ from aiogram.fsm.context import FSMContext
 import logging
 import os
 import re
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -1109,35 +1110,90 @@ async def admin_review_description(message: Message, state: FSMContext):
 async def admin_review_media(message: Message, state: FSMContext):
     media_file_id = None
     media_type = None
+    media_local_path = None
     text_value = (message.text or "").strip().lower()
 
+    # Ensure reviews directory exists
+    reviews_dir = Path("assets/reviews")
+    reviews_dir.mkdir(parents=True, exist_ok=True)
+
     if message.photo:
-        media_file_id = message.photo[-1].file_id
-        media_type = "photo"
-        await message.answer("✅ Фото успешно загружено для отзыва")
+        try:
+            photo = message.photo[-1]
+            media_file_id = photo.file_id
+            media_type = "photo"
+
+            # Download and save photo
+            timestamp = int(time.time())
+            filename = f"review_{timestamp}_{uuid4().hex[:8]}.jpg"
+            file_path = reviews_dir / filename
+
+            await message.bot.download(photo, destination=file_path)
+            media_local_path = str(file_path).replace(os.sep, "/")
+
+            await message.answer(
+                f"✅ <b>Фото добавлено</b>\n"
+                f"📷 Файл сохранён локально\n"
+                f"🔗 ID Telegram: {media_file_id[:20]}...",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            await message.answer(f"❌ Ошибка при сохранении фото: {e}")
+            return
+
     elif message.document:
-        media_file_id = message.document.file_id
-        media_type = "document"
-        await message.answer("✅ Файл успешно загружен для отзыва")
+        try:
+            document = message.document
+            media_file_id = document.file_id
+            media_type = "document"
+
+            # Download and save document
+            timestamp = int(time.time())
+            file_ext = Path(document.file_name or "document.pdf").suffix
+            filename = f"review_{timestamp}_{uuid4().hex[:8]}{file_ext}"
+            file_path = reviews_dir / filename
+
+            await message.bot.download(document, destination=file_path)
+            media_local_path = str(file_path).replace(os.sep, "/")
+
+            await message.answer(
+                f"✅ <b>Файл добавлен</b>\n"
+                f"📄 {document.file_name or 'документ'}\n"
+                f"💾 Размер: {document.file_size / 1024:.1f} KB",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            await message.answer(f"❌ Ошибка при сохранении файла: {e}")
+            return
+
     elif text_value == "-" or text_value == "нет":
         media_file_id = None
         media_type = None
-        await message.answer("⏭️ Продолжаем без медиа")
+        media_local_path = None
+        await message.answer("⏭️ <b>Отзыв без медиа</b>\n\n📝 Продолжаем добавлять описание", parse_mode="HTML")
     else:
         await message.answer(
-            "❌ Ошибка!\n\n"
+            "❌ <b>Неверный формат!</b>\n\n"
             "Пожалуйста, отправьте:\n"
-            "📷 Фото ИЛИ\n"
-            "📄 Файл (PDF) ИЛИ\n"
-            "Введите: - (чтобы пропустить)"
+            "📷 <b>Фото</b> (JPG, PNG) ИЛИ\n"
+            "📄 <b>Файл</b> (PDF, DOC и т.д.) ИЛИ\n"
+            "➖ Введите: <code>-</code> (чтобы пропустить)",
+            parse_mode="HTML"
         )
         return
 
-    await state.update_data(review_media_file_id=media_file_id, review_media_type=media_type)
+    await state.update_data(
+        review_media_file_id=media_file_id,
+        review_media_type=media_type,
+        review_media_local_path=media_local_path
+    )
     await message.answer(
-        "Добавьте ссылки (через пробел/новую строку).\n"
-        "Можно использовать URL или @username.\n"
-        "Если ссылки не нужны, отправьте: -"
+        "🔗 <b>Добавьте ссылки</b> (если есть)\n\n"
+        "Введите через пробел или новую строку:\n"
+        "• URL: <code>https://example.com</code>\n"
+        "• Username: <code>@myusername</code>\n\n"
+        "Или отправьте <code>-</code> если ссылок нет",
+        parse_mode="HTML"
     )
     await state.set_state(AdminStates.waiting_review_links)
 
@@ -1162,21 +1218,32 @@ async def admin_review_links(message: Message, state: FSMContext):
     description = (data.get("review_description") or "").strip()
     media_file_id = data.get("review_media_file_id")
     media_type = data.get("review_media_type")
+    media_local_path = data.get("review_media_local_path")
 
     if not description:
         await state.clear()
-        await message.answer("Сценарий создания отзыва сброшен. Запустите заново.")
+        await message.answer("❌ <b>Сценарий отменён</b>\n\nОписание отзыва не заполнено. Пожалуйста, запустите снова.", parse_mode="HTML")
         return
 
-    # Debug информация
-    debug_msg = (
-        f"📋 <b>DEBUG Отзыва:</b>\n"
-        f"• Описание: {len(description)} символов\n"
-        f"• media_file_id: {media_file_id[:20] + '...' if media_file_id else 'None'}\n"
-        f"• media_type: '{media_type}'\n"
-        f"• Ссылок: {len(links)}"
+    # Info message with emoji
+    media_info = ""
+    if media_type == "photo":
+        media_info = f"📷 Фото (сохранено локально)"
+    elif media_type == "document":
+        media_info = f"📄 Документ (сохранено локально)"
+    else:
+        media_info = f"⏭️ Без медиа"
+
+    links_info = f"🔗 Ссылок: {len(links)}" if links else "🔗 Ссылок: нет"
+
+    info_msg = (
+        f"📋 <b>Создание отзыва</b>\n\n"
+        f"✍️ Описание: {len(description)} символов\n"
+        f"{media_info}\n"
+        f"{links_info}\n\n"
+        f"⏳ Сохраняю в базу..."
     )
-    await message.answer(debug_msg, parse_mode="HTML")
+    await message.answer(info_msg, parse_mode="HTML")
 
     review_id = create_review_card(
         created_by=message.from_user.id,
@@ -1184,6 +1251,7 @@ async def admin_review_links(message: Message, state: FSMContext):
         media_file_id=media_file_id,
         media_type=media_type,
         links=links,
+        media_local_path=media_local_path,
     )
     log_admin_action(
         admin_telegram_id=message.from_user.id,
@@ -1199,32 +1267,48 @@ async def admin_review_links(message: Message, state: FSMContext):
     )
 
     caption = (
-        f"<b>Отзыв #{review_id}</b>\n\n"
+        f"<b>📝 Отзыв #{review_id}</b>\n\n"
         f"{description}"
         f"{build_links_block(links)}"
     )
 
-    media_status = ""
-    if media_file_id and media_type == "photo":
-        media_status = " (📷 с фото)"
-    elif media_file_id and media_type == "document":
-        media_status = " (📄 с файлом)"
+    media_status = "✅"
+    if media_type == "photo":
+        media_status = "✅ 📷 С фото"
+    elif media_type == "document":
+        media_status = "✅ 📄 С документом"
+    else:
+        media_status = "✅ Текстовый отзыв"
 
+    # Try to display the preview
     try:
-        if media_file_id and media_type == "photo":
-            await message.answer_photo(photo=media_file_id, caption=caption, parse_mode="HTML")
-        elif media_file_id and media_type == "document":
-            await message.answer_document(document=media_file_id, caption=caption, parse_mode="HTML")
+        if media_local_path and media_type == "photo":
+            from aiogram.types import FSInputFile
+            await message.answer_photo(
+                photo=FSInputFile(media_local_path),
+                caption=caption,
+                parse_mode="HTML"
+            )
+        elif media_local_path and media_type == "document":
+            from aiogram.types import FSInputFile
+            await message.answer_document(
+                document=FSInputFile(media_local_path),
+                caption=caption,
+                parse_mode="HTML"
+            )
         else:
             await message.answer(caption, parse_mode="HTML")
     except Exception as e:
+        logging.error(f"Error displaying review preview: {e}")
         await message.answer(caption, parse_mode="HTML")
-        media_status += f" ⚠️ (не удалось загрузить медиа)"
 
     await state.clear()
     await message.answer(
-        f"✅ <b>Карточка отзыва #{review_id} создана</b>{media_status}\n\n"
-        f"Отзыв будет отображаться ученикам в разделе «⭐ Отзывы»",
+        f"<b>✅ Отзыв #{review_id} создан успешно!</b>\n\n"
+        f"📊 Статус: {media_status}\n"
+        f"📌 Количество ссылок: {len(links)}\n"
+        f"👥 Видимость: Ученики в разделе ⭐ Отзывы\n\n"
+        f"💡 <i>Отзыв сохранён с локальным хранилищем медиа</i>",
         parse_mode="HTML",
         reply_markup=get_admin_reply_menu(message.from_user.id),
     )
@@ -1239,29 +1323,47 @@ async def admin_review_list(callback: CallbackQuery):
 
     reviews = get_active_review_cards(limit=100)
     if not reviews:
-        await callback.message.answer("Нет активных отзывов.")
+        await callback.message.answer(
+            "📭 <b>Отзывы не найдены</b>\n\n"
+            "В системе нет активных отзывов. Создайте первый отзыв! ✨",
+            parse_mode="HTML"
+        )
         await callback.answer()
         return
 
-    text = "<b>📋 Список отзывов:</b>\n\n"
+    text = "<b>📋 Активные отзывы</b>\n\n"
     for idx, review in enumerate(reviews, 1):
-        media_emoji = "📷" if review.get("media_type") == "photo" else "📄" if review.get("media_type") == "document" else ""
-        desc_preview = (review.get("description") or "")[:40]
-        text += f"{idx}. #{review['id']} {media_emoji}\n   <code>{desc_preview}...</code>\n"
+        media_emoji = "📷" if review.get("media_type") == "photo" else "📄" if review.get("media_type") == "document" else "📝"
+        desc_preview = (review.get("description") or "Нет описания")[:35]
+        links_count = len(review.get("links") or [])
+        links_emoji = f"🔗 {links_count}" if links_count > 0 else ""
+
+        text += (
+            f"<b>#{review['id']}</b> {media_emoji}\n"
+            f"  📌 {desc_preview}{'...' if len(review.get('description', '')) > 35 else ''}\n"
+            f"  {links_emoji}\n\n"
+        )
 
     await callback.message.answer(text, parse_mode="HTML")
 
     # Кнопки удаления
     buttons = []
     for review in reviews[:10]:  # Максимум 10 кнопок в одном сообщении
+        media_icon = "📷" if review.get("media_type") == "photo" else "📄" if review.get("media_type") == "document" else "📝"
         buttons.append([InlineKeyboardButton(
-            text=f"🗑️ Удалить #{review['id']}",
+            text=f"🗑️ #{review['id']} {media_icon}",
             callback_data=f"admin_delete_review_{review['id']}"
         )])
 
     if buttons:
+        buttons.append([InlineKeyboardButton(text="↩️ Назад", callback_data="menu_home")])
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-        await callback.message.answer("Выберите отзыв для удаления:", reply_markup=keyboard)
+        await callback.message.answer(
+            "🔴 <b>Удаление отзывов</b>\n\n"
+            "Выберите отзыв для удаления (действие необратимо):",
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
 
     await callback.answer()
 
@@ -1276,7 +1378,7 @@ async def admin_delete_review(callback: CallbackQuery):
     try:
         review_id = int(callback.data.split("_")[-1])
     except (ValueError, IndexError):
-        await callback.answer("Ошибка при удалении", show_alert=True)
+        await callback.answer("❌ Ошибка при обработке удаления", show_alert=True)
         return
 
     success = deactivate_review_card(review_id)
@@ -1290,12 +1392,20 @@ async def admin_delete_review(callback: CallbackQuery):
             status="success",
         )
         await callback.message.answer(
-            f"✅ Отзыв #{review_id} удалён.\n"
-            f"Он больше не будет виден ученикам.",
+            f"<b>🗑️ Отзыв удалён</b>\n\n"
+            f"📋 ID: #{review_id}\n"
+            f"❌ Статус: Деактивирован\n"
+            f"👥 Видимость: Больше не видно ученикам\n\n"
+            f"💾 Данные сохранены в архиве (не удалены)",
             parse_mode="HTML"
         )
     else:
-        await callback.message.answer(f"❌ Не удалось удалить отзыв #{review_id}")
+        await callback.message.answer(
+            f"<b>❌ Ошибка удаления</b>\n\n"
+            f"Не удалось деактивировать отзыв #{review_id}\n"
+            f"Попробуйте ещё раз или обратитесь к разработчику",
+            parse_mode="HTML"
+        )
 
     await callback.answer()
 

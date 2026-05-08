@@ -385,6 +385,7 @@ def init_db():
             description TEXT NOT NULL,
             media_file_id TEXT,
             media_type TEXT,
+            media_local_path TEXT,
             links_json TEXT,
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
@@ -506,6 +507,8 @@ def _ensure_review_cards_columns(cur: sqlite3.Cursor):
         cur.execute("ALTER TABLE review_cards ADD COLUMN media_file_id TEXT")
     if "media_type" not in existing_columns:
         cur.execute("ALTER TABLE review_cards ADD COLUMN media_type TEXT")
+    if "media_local_path" not in existing_columns:
+        cur.execute("ALTER TABLE review_cards ADD COLUMN media_local_path TEXT")
     if "links_json" not in existing_columns:
         cur.execute("ALTER TABLE review_cards ADD COLUMN links_json TEXT")
     if "is_active" not in existing_columns:
@@ -3039,6 +3042,7 @@ def create_review_card(
     media_file_id: str | None = None,
     media_type: str | None = None,
     links: list[str] | None = None,
+    media_local_path: str | None = None,
 ) -> int:
     conn = get_connection()
     cur = conn.cursor()
@@ -3051,18 +3055,20 @@ def create_review_card(
             description,
             media_file_id,
             media_type,
+            media_local_path,
             links_json,
             is_active,
             created_at,
             updated_at
         )
-        VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
         """,
         (
             created_by,
             description.strip(),
             media_file_id,
             media_type,
+            media_local_path,
             links_json,
             now,
             now,
@@ -3103,6 +3109,7 @@ def get_active_review_cards(limit: int = 200) -> list[dict]:
             description,
             media_file_id,
             media_type,
+            media_local_path,
             links_json,
             created_at
         FROM review_cards
@@ -3117,7 +3124,7 @@ def get_active_review_cards(limit: int = 200) -> list[dict]:
 
     result: list[dict] = []
     for row in rows:
-        links_value = row[4] or "[]"
+        links_value = row[5] or "[]"
         try:
             links = json.loads(links_value)
             if not isinstance(links, list):
@@ -3126,6 +3133,7 @@ def get_active_review_cards(limit: int = 200) -> list[dict]:
             links = []
         media_type_raw = (row[3] or "").strip()
         media_file_id_raw = row[2]
+        media_local_path_raw = row[4]
 
         result.append(
             {
@@ -3133,8 +3141,9 @@ def get_active_review_cards(limit: int = 200) -> list[dict]:
                 "description": (row[1] or "").strip(),
                 "media_file_id": media_file_id_raw if media_file_id_raw else None,
                 "media_type": media_type_raw if media_type_raw else None,
+                "media_local_path": media_local_path_raw if media_local_path_raw else None,
                 "links": [str(link).strip() for link in links if str(link).strip()][:8],
-                "created_at": row[5],
+                "created_at": row[6],
             }
         )
     return result
