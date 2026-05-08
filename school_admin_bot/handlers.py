@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from config import SCHOOL_BOT_PAYMENTS_CHAT_ID, SCHOOL_BOT_TOKEN, SCHOOL_BOT_USERNAME, SUPERADMINS
 
 # Setup BOT_DIR for path resolution
-BOT_DIR = Path(__file__).resolve().parent.parent
+BOT_DIR = Path(__file__).resolve().parent.parent.parent  # Points to /opt/school-system/
 
 
 def resolve_local_path(path_value: str) -> str:

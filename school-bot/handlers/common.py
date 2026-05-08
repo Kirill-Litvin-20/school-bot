@@ -13,7 +13,7 @@ from keyboards import (
 from states import ApplicationForm
 from shared.database import get_active_admin_contacts, get_active_review_cards, get_teacher_cards_by_subject
 
-BOT_DIR = Path(__file__).resolve().parent.parent
+BOT_DIR = Path(__file__).resolve().parent.parent.parent  # Points to /opt/school-system/
 
 
 def is_valid_telegram_username(text: str) -> bool:
