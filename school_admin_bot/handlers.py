@@ -12,6 +12,19 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from config import SCHOOL_BOT_PAYMENTS_CHAT_ID, SCHOOL_BOT_TOKEN, SCHOOL_BOT_USERNAME, SUPERADMINS
+
+# Setup BOT_DIR for path resolution
+BOT_DIR = Path(__file__).resolve().parent.parent
+
+
+def resolve_local_path(path_value: str) -> str:
+    """Convert relative path to absolute path based on BOT_DIR."""
+    path = Path(path_value)
+    if path.is_absolute():
+        return str(path)
+    return str((BOT_DIR / path).resolve())
+
+
 from keyboards import (
     get_superadmin_menu,
     get_superadmin_users_menu,
