@@ -21,6 +21,11 @@ USE_POSTGRES = DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswi
 
 
 def _replace_qmark_placeholders(sql: str) -> str:
+    """Convert SQLite-style ? placeholders to psycopg2-style %s.
+
+    Also escapes literal % characters (e.g. inside LIKE '...%...') as %%
+    so psycopg2 does not misinterpret them as parameter markers.
+    """
     result: list[str] = []
     in_single_quote = False
     in_double_quote = False
@@ -35,15 +40,21 @@ def _replace_qmark_placeholders(sql: str) -> str:
         if ch == "'" and not in_double_quote and not escaped:
             in_single_quote = not in_single_quote
             result.append(ch)
+            escaped = False
             continue
 
         if ch == '"' and not in_single_quote and not escaped:
             in_double_quote = not in_double_quote
             result.append(ch)
+            escaped = False
             continue
 
         if ch == "?" and not in_single_quote and not in_double_quote:
             result.append("%s")
+        elif ch == "%" and (in_single_quote or in_double_quote):
+            # Escape literal % inside SQL string literals so psycopg2 won't
+            # treat them as parameter markers (e.g. LIKE '%foo%').
+            result.append("%%")
         else:
             result.append(ch)
         escaped = False

@@ -1,7 +1,11 @@
+import logging
+
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+
+logger = logging.getLogger(__name__)
 
 from keyboards import (
     get_main_menu_keyboard,
@@ -245,15 +249,20 @@ async def menu_cabinet(callback: CallbackQuery, state: FSMContext):
         return
 
     student_id, student_name, _, _ = students[0]
-    directions = get_student_directions(student_id)
-    recent_payments = get_recent_payment_history_by_telegram_user(
-        callback.from_user.id,
-        limit=4,
-    )
-
-    text = build_cabinet_text(student_name, directions, recent_payments, student_id=student_id)
-    text += build_multi_students_warning(len(students))
-    await callback.message.answer(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard())
+    try:
+        directions = get_student_directions(student_id)
+        recent_payments = get_recent_payment_history_by_telegram_user(
+            callback.from_user.id,
+            limit=4,
+        )
+        text = build_cabinet_text(student_name, directions, recent_payments, student_id=student_id)
+        text += build_multi_students_warning(len(students))
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard())
+    except Exception:
+        logger.exception("menu_cabinet failed for user %s", callback.from_user.id)
+        await callback.message.answer(
+            "⚠️ Не удалось загрузить личный кабинет. Попробуйте ещё раз или обратитесь к администратору."
+        )
     await callback.answer()
 
 
