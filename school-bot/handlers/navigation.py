@@ -377,7 +377,7 @@ async def show_referral_code(callback: CallbackQuery):
     await callback.message.answer(
         "🎁 <b>ВАШ РЕФЕРАЛЬНЫЙ КОД</b>\n\n"
         "Отправьте эту ссылку друзьям:\n\n"
-        f"<code>{referral_link}</code>\n\n"
+        f"<a href=\"{referral_link}\">{referral_link}</a>\n\n"
         "<b>Как это работает:</b>\n"
         "1️⃣ Друг переходит по вашей ссылке и оставляет заявку.\n"
         "2️⃣ Проходит бесплатную диагностику.\n"
