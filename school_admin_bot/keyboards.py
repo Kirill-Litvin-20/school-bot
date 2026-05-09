@@ -59,6 +59,7 @@ def get_superadmin_reports_menu():
 def get_admin_menu():
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Дашборд", callback_data="admin_dashboard")],
             [InlineKeyboardButton(text="👥 Управление", callback_data="admin_section_management")],
             [InlineKeyboardButton(text="📚 Учеба", callback_data="admin_section_education")],
             [InlineKeyboardButton(text="💰 Финансы", callback_data="admin_section_finance")],
@@ -116,8 +117,9 @@ def get_admin_reports_menu():
 def get_teacher_menu():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Мои ученики", callback_data="teacher_students")],
-            [InlineKeyboardButton(text="Отметить посещение", callback_data="teacher_attendance")],
+            [InlineKeyboardButton(text="👥 Мои ученики", callback_data="teacher_students")],
+            [InlineKeyboardButton(text="✅ Отметить посещение", callback_data="teacher_attendance")],
+            [InlineKeyboardButton(text="📊 Мой отчёт за неделю", callback_data="teacher_weekly_report")],
         ]
     )
 

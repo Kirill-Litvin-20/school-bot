@@ -9,6 +9,8 @@ from keyboards import (
     get_offers_menu_keyboard,
     get_offer_application_keyboard,
     get_cabinet_keyboard,
+    get_faq_menu_keyboard,
+    get_faq_back_keyboard,
 )
 from shared.database import get_teacher_catalog_subjects
 from shared.database import (
@@ -426,6 +428,137 @@ async def show_first_package(callback: CallbackQuery):
         "<i>Не пропустите эту выгодную предложение!</i>"
     )
     await callback.message.edit_text(text, reply_markup=get_offer_application_keyboard("first_package"), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "menu_faq")
+async def show_faq_menu(callback: CallbackQuery):
+    text = (
+        "❓ <b>ПОМОЩЬ И ЧАСТЫЕ ВОПРОСЫ</b>\n\n"
+        "Выберите интересующий вопрос — ниже короткие ответы. "
+        "Если ответа нет, нажмите «← В меню» → «👤 Личный кабинет» → "
+        "«✉️ Написать администратору»."
+    )
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=get_faq_menu_keyboard(),
+            parse_mode="HTML",
+        )
+    except Exception:
+        await callback.message.answer(
+            text,
+            reply_markup=get_faq_menu_keyboard(),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "faq_pay")
+async def faq_pay(callback: CallbackQuery):
+    from config import (
+        PAYMENT_ACCOUNT_HOLDER,
+        PAYMENT_BANK_NAME,
+        PAYMENT_BANK_NUMBER,
+    )
+
+    text = (
+        "💳 <b>КАК ОПЛАТИТЬ ЗАНЯТИЯ</b>\n\n"
+        "<b>Реквизиты:</b>\n"
+        f"🏦 Номер счёта: <code>{PAYMENT_BANK_NUMBER}</code>\n"
+        f"🏢 Банк: {PAYMENT_BANK_NAME}\n"
+        f"👤 Получатель: {PAYMENT_ACCOUNT_HOLDER}\n\n"
+        "<b>Порядок:</b>\n"
+        "1. Сделайте перевод на указанные реквизиты.\n"
+        "2. В комментарии к переводу укажите имя ученика.\n"
+        "3. Откройте раздел оплаты в боте (👤 Личный кабинет → 💳 Оплата) "
+        "и пришлите фото или PDF-чека.\n"
+        "4. После проверки администратором занятия начислятся на ваш баланс, "
+        "вам придёт уведомление.\n\n"
+        "💡 Если у вас активна реферальная скидка 20%, она будет учтена. "
+        "Заплатите на 20% меньше указанной в прайсе суммы."
+    )
+    await callback.message.edit_text(text, reply_markup=get_faq_back_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "faq_package")
+async def faq_package(callback: CallbackQuery):
+    text = (
+        "📦 <b>ЧТО ТАКОЕ ПАКЕТ ЗАНЯТИЙ</b>\n\n"
+        "Пакет — это сразу несколько занятий, оплаченных одним платежом, "
+        "по более выгодной цене за одно занятие.\n\n"
+        "Чем больше пакет, тем ниже цена за каждое занятие. "
+        "Конкретные размеры пакетов и цены можно увидеть в разделе оплаты "
+        "(👤 Личный кабинет → 💳 Оплата) — там приходит фото с актуальным "
+        "прайсом.\n\n"
+        "💡 Все занятия из пакета хранятся на вашем балансе и расходуются по мере "
+        "проведения. Срок годности занятий не сгорает."
+    )
+    await callback.message.edit_text(text, reply_markup=get_faq_back_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "faq_reschedule")
+async def faq_reschedule(callback: CallbackQuery):
+    text = (
+        "🔄 <b>ПЕРЕНОС И ОТМЕНА ЗАНЯТИЙ</b>\n\n"
+        "Перенести или отменить занятие можно <b>не позже чем за 6 часов</b> "
+        "до его начала. В этом случае занятие не списывается с баланса.\n\n"
+        "Если предупредить менее чем за 6 часов (или вообще не прийти), "
+        "<b>занятие списывается с баланса</b> как проведённое.\n\n"
+        "<b>Куда сообщать:</b>\n"
+        "• своему преподавателю напрямую,\n"
+        "• или администратору школы (👤 Личный кабинет → ✉️ Написать "
+        "администратору).\n\n"
+        "💡 Чем раньше вы предупредите — тем проще найти удобный новый слот."
+    )
+    await callback.message.edit_text(text, reply_markup=get_faq_back_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "faq_referral")
+async def faq_referral(callback: CallbackQuery):
+    text = (
+        "🎁 <b>РЕФЕРАЛЬНАЯ ПРОГРАММА — КРАТКО</b>\n\n"
+        "<b>Вы приглашаете друга</b> по своей ссылке.\n\n"
+        "Друг получает:\n"
+        "✅ бесплатное диагностическое занятие;\n"
+        "✅ скидку <b>20%</b> на своё первое платное занятие.\n\n"
+        "Вы получаете:\n"
+        "✅ <b>+1 бесплатное занятие</b> на свой баланс — после того, как друг "
+        "оплатит первое занятие. Бонус автоматически списывается на ближайшем "
+        "проведённом занятии.\n\n"
+        "Свою ссылку возьмите в «👤 Личный кабинет» → «🎁 Мой реферальный код»."
+    )
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🎁 Открыть мой реферальный код", callback_data="show_referral_code")],
+                [InlineKeyboardButton(text="← К списку вопросов", callback_data="menu_faq")],
+                [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+            ]
+        ),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "faq_link")
+async def faq_link(callback: CallbackQuery):
+    text = (
+        "👤 <b>ПРИВЯЗКА АККАУНТА</b>\n\n"
+        "Когда администратор заводит вашу карточку, он использует ваш Telegram "
+        "@username или ссылку для автоматической привязки.\n\n"
+        "Если в Личном кабинете написано «Мы пока не нашли вас в базе» — "
+        "значит ваш Telegram-аккаунт ещё не привязан к карточке ученика. "
+        "Напишите администратору (✉️ Написать администратору), и он привяжет "
+        "вас вручную или пришлёт ссылку для автоматической привязки.\n\n"
+        "💡 После смены @username в Telegram карточку нужно перепривязать — "
+        "тоже через администратора."
+    )
+    await callback.message.edit_text(text, reply_markup=get_faq_back_keyboard(), parse_mode="HTML")
     await callback.answer()
 
 

@@ -123,6 +123,9 @@ def test_attendance_writeoff_can_create_debt(db):
         phone="+79990004455",
     )
     teacher_id = db.add_teacher_if_not_exists("Irina Volkova", telegram_id=20004)
+    # First direction auto-bumps balance to 1 (diagnostic lesson). To force a
+    # debt we need to consume two lessons: first attendance brings balance to 0,
+    # second one brings it into the negative territory.
     db.add_student_lesson(
         student_id=student_id,
         teacher_id=teacher_id,
@@ -132,17 +135,17 @@ def test_attendance_writeoff_can_create_debt(db):
     )
     direction_id = db.get_student_directions(student_id)[0][0]
 
-    db.mark_attendance(
-        direction_id=direction_id,
-        status="present",
-        marked_by=90001,
-    )
+    db.mark_attendance(direction_id=direction_id, status="present", marked_by=90001)
+    db.mark_attendance(direction_id=direction_id, status="present", marked_by=90001)
 
     updated_direction = db.get_student_lesson_by_id(direction_id)
     assert updated_direction is not None
     assert updated_direction[4] == -1
 
-    history = db.get_balance_history_by_student(student_id)
-    assert len(history) == 1
-    assert history[0][4] == "attendance_writeoff"
-    assert history[0][5] == -1
+    writeoff_rows = [
+        row
+        for row in db.get_balance_history_by_student(student_id)
+        if row[4] == "attendance_writeoff"
+    ]
+    assert len(writeoff_rows) == 2
+    assert all(row[5] == -1 for row in writeoff_rows)

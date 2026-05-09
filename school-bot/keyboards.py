@@ -63,13 +63,37 @@ def get_user_type_keyboard():
 def get_main_menu_keyboard():
     buttons = [
         [InlineKeyboardButton(text="📝 Оставить заявку", callback_data="menu_signup")],
+        [InlineKeyboardButton(text="💳 Оплатить занятия", callback_data="menu_paid")],
         [InlineKeyboardButton(text="👨‍🏫 Преподаватели", callback_data="menu_teachers")],
         [InlineKeyboardButton(text="🎁 Акции и предложения", callback_data="menu_offers")],
         [InlineKeyboardButton(text="⭐ Отзывы", callback_data="menu_reviews")],
         [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_cabinet")],
+        [InlineKeyboardButton(text="❓ Помощь и FAQ", callback_data="menu_faq")],
         [InlineKeyboardButton(text="📢 Канал школы", url="https://t.me/school_integral_ru")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_faq_menu_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Как оплатить", callback_data="faq_pay")],
+            [InlineKeyboardButton(text="📦 Что такое пакет занятий", callback_data="faq_package")],
+            [InlineKeyboardButton(text="🔄 Перенос и отмена занятий", callback_data="faq_reschedule")],
+            [InlineKeyboardButton(text="🎁 Реферальная программа", callback_data="faq_referral")],
+            [InlineKeyboardButton(text="👤 Привязка аккаунта", callback_data="faq_link")],
+            [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+        ]
+    )
+
+
+def get_faq_back_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="← К списку вопросов", callback_data="menu_faq")],
+            [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+        ]
+    )
 
 
 def get_teacher_subject_keyboard(subjects: list[str] | None = None):

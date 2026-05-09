@@ -1,0 +1,22 @@
+[Unit]
+Description=School admin bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/school-system
+EnvironmentFile=/opt/school-system/.env
+ExecStart=/usr/bin/env python3 /opt/school-system/school_admin_bot/bot.py
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=school-admin-bot
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

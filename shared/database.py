@@ -5,7 +5,7 @@ import importlib.util
 import secrets
 import re
 from html import escape
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 try:
@@ -1832,7 +1832,7 @@ def get_recent_payment_history_by_telegram_user(telegram_user_id: int, limit: in
                     SELECT SUM(bh.lessons_delta)
                     FROM balance_history bh
                     WHERE bh.operation_type = 'manual_topup'
-                      AND POSITION('#' || CAST(pr.id AS TEXT) IN COALESCE(bh.comment, '')) > 0
+                      AND COALESCE(bh.comment, '') LIKE '%#' || CAST(pr.id AS TEXT) || '%'
                 ),
                 0
             ) AS lessons_added
@@ -1877,6 +1877,130 @@ def update_payment_request_status(payment_request_id: int, status: str, admin_id
     conn.commit()
     conn.close()
     ensure_teacher_subject_link(teacher_id, subject_name)
+
+
+def get_admin_dashboard_metrics() -> dict:
+    """Aggregate metrics shown on the admin dashboard.
+
+    Cheap to compute (one short query per metric) so it can be called every
+    time admin opens the dashboard screen.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+
+    week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+
+    cur.execute(
+        """
+        SELECT status, COUNT(*)
+        FROM payment_requests
+        WHERE status IN ('pending', 'processing')
+        GROUP BY status
+        """
+    )
+    pending_by_status = {row[0]: int(row[1]) for row in cur.fetchall()}
+
+    cur.execute(
+        """
+        SELECT COUNT(DISTINCT s.id), COALESCE(SUM(ABS(sl.lesson_balance)), 0)
+        FROM student_lessons sl
+        JOIN students s ON s.id = sl.student_id
+        WHERE sl.lesson_balance < 0
+        """
+    )
+    debt_row = cur.fetchone() or (0, 0)
+    debtors_count = int(debt_row[0] or 0)
+    debt_lessons_total = int(debt_row[1] or 0)
+
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM attendance
+        WHERE lesson_date >= ?
+          AND status IN ('present', 'completed')
+        """,
+        (week_ago,),
+    )
+    lessons_week = int((cur.fetchone() or (0,))[0] or 0)
+
+    # New students = those whose first balance_history row landed in last 7d
+    # (we don't have students.created_at). Diagnostic_lesson is the very first
+    # row added for any new student.
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM balance_history
+        WHERE operation_type = 'diagnostic_lesson'
+          AND created_at >= ?
+        """,
+        (week_ago,),
+    )
+    new_students_week = int((cur.fetchone() or (0,))[0] or 0)
+
+    cur.execute(
+        """
+        SELECT status, COUNT(*)
+        FROM referrals
+        GROUP BY status
+        """
+    )
+    referrals_by_status = {row[0]: int(row[1]) for row in cur.fetchall()}
+
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM payment_requests
+        WHERE status = 'expired'
+          AND COALESCE(updated_at, created_at) >= ?
+        """,
+        (week_ago,),
+    )
+    expired_week = int((cur.fetchone() or (0,))[0] or 0)
+
+    conn.close()
+
+    return {
+        "payments_pending": pending_by_status.get("pending", 0),
+        "payments_processing": pending_by_status.get("processing", 0),
+        "debtors_count": debtors_count,
+        "debt_lessons_total": debt_lessons_total,
+        "lessons_attended_week": lessons_week,
+        "new_students_week": new_students_week,
+        "referrals_captured": referrals_by_status.get("captured", 0),
+        "referrals_linked": referrals_by_status.get("student_linked", 0),
+        "referrals_rewarded": referrals_by_status.get("rewarded", 0),
+        "payments_expired_week": expired_week,
+    }
+
+
+def get_stale_pending_payment_requests(older_than_days: int = 30) -> list[tuple]:
+    """Find payment_requests still in pending/processing older than N days.
+
+    Returns rows shaped like get_payment_request_by_id, suitable to feed back
+    into try_transition_payment_request_status + DM the student.
+    """
+    if older_than_days <= 0:
+        return []
+    cutoff = (datetime.now() - timedelta(days=older_than_days)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, telegram_user_id, telegram_username, telegram_full_name,
+               caption_text, file_id, file_type, status, approved_by,
+               rejected_by, created_at, updated_at
+        FROM payment_requests
+        WHERE status IN ('pending', 'processing')
+          AND created_at < ?
+        ORDER BY id ASC
+        """,
+        (cutoff,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
 
 
 def try_transition_payment_request_status(
@@ -3220,6 +3344,53 @@ def get_recent_admin_actions(limit: int = 50):
     return rows
 
 
+def get_weekly_lessons_report_for_teacher_telegram(
+    telegram_id: int,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list:
+    """Same as get_teacher_weekly_lessons_report but scoped to a single
+    teacher (looked up by telegram_id). Used by the teacher self-report
+    button in the admin bot."""
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # attendance.lesson_date is stored as 'YYYY-MM-DD HH:MM:SS'. Compare
+    # against the full datetime so a lesson marked at 14:00 today is not
+    # accidentally excluded by a date-only upper bound.
+    if start_date is None:
+        start_dt = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        start_dt = f"{start_date} 00:00:00"
+    if end_date is None:
+        end_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        end_dt = f"{end_date} 23:59:59"
+
+    cur.execute(
+        """
+        SELECT
+            t.id,
+            t.full_name,
+            sl.subject_name,
+            COUNT(DISTINCT a.id) AS lessons_count,
+            MAX(a.lesson_date) AS last_lesson_date
+        FROM attendance a
+        JOIN student_lessons sl ON a.student_lesson_id = sl.id
+        JOIN teachers t ON sl.teacher_id = t.id
+        WHERE a.lesson_date BETWEEN ? AND ?
+          AND a.status IN ('present', 'completed')
+          AND t.telegram_id = ?
+        GROUP BY t.id, sl.subject_name
+        ORDER BY sl.subject_name
+        """,
+        (start_dt, end_dt, int(telegram_id)),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
 def get_teacher_weekly_lessons_report(start_date: str = None, end_date: str = None) -> list:
     """Получает отчет о количестве проведенных занятий по учителям за период.
 
@@ -3233,12 +3404,17 @@ def get_teacher_weekly_lessons_report(start_date: str = None, end_date: str = No
     conn = get_connection()
     cur = conn.cursor()
 
-    if start_date is None or end_date is None:
-        from datetime import timedelta
-        today = datetime.now().strftime("%Y-%m-%d")
-        week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-        start_date = start_date or week_ago
-        end_date = end_date or today
+    # attendance.lesson_date is stored as 'YYYY-MM-DD HH:MM:SS', so the period
+    # bounds need full datetime granularity — a date-only upper bound would
+    # cut off everything that happened today after 00:00.
+    if start_date is None:
+        start_dt = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        start_dt = f"{start_date} 00:00:00"
+    if end_date is None:
+        end_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        end_dt = f"{end_date} 23:59:59"
 
     cur.execute(
         """
@@ -3256,7 +3432,7 @@ def get_teacher_weekly_lessons_report(start_date: str = None, end_date: str = No
         GROUP BY t.id, sl.subject_name
         ORDER BY t.full_name, sl.subject_name, lessons_count DESC
         """,
-        (start_date, end_date),
+        (start_dt, end_dt),
     )
     rows = cur.fetchall()
     conn.close()

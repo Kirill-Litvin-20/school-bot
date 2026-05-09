@@ -142,6 +142,7 @@ def format_payment_status(status: str) -> str:
         "processing": "На проверке",
         "approved": "Подтверждена",
         "rejected": "Отклонена",
+        "expired": "Просрочена",
     }.get(status, status)
 
 
