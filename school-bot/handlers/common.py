@@ -11,7 +11,11 @@ from keyboards import (
     get_teacher_card_keyboard,
 )
 from states import ApplicationForm
-from shared.database import get_active_admin_contacts, get_active_review_cards, get_teacher_cards_by_subject
+from shared.database import (
+    get_active_invitee_discount_percent,
+    get_active_review_cards,
+    get_teacher_cards_by_subject,
+)
 
 BOT_DIR = Path(__file__).resolve().parent.parent.parent  # Points to /opt/school-system/
 
@@ -116,6 +120,13 @@ def _get_photo_media(photo_ref: str | None):
     resolved = Path(resolve_local_path(photo_ref))
     if resolved.exists():
         return FSInputFile(str(resolved))
+    import logging
+    logging.warning(
+        "Teacher photo file not found locally, falling back to telegram ref. "
+        "stored=%s resolved=%s",
+        photo_ref,
+        resolved,
+    )
     return photo_ref
 
 
@@ -140,7 +151,7 @@ def build_application_text(data: dict) -> str:
     subjects = data.get("subjects", [])
     subjects_text = ", ".join(subjects) if subjects else "-"
 
-    return (
+    text = (
         "📌 <b>Новая заявка</b>\n\n"
         f"👤 <b>Кто оставил заявку:</b> {data.get('user_type', '-')}\n"
         f"📝 <b>Имя:</b> {data.get('name', '-')}\n"
@@ -153,6 +164,12 @@ def build_application_text(data: dict) -> str:
         f"🔗 <b>Контакт:</b> {data.get('contact_value', '-')}\n"
         f"💬 <b>Комментарий:</b> {data.get('comment', '-')}"
     )
+
+    referral_code = data.get("referral_code")
+    if referral_code:
+        text += f"\n🎁 <b>Реферал от:</b> tg_id={referral_code}"
+
+    return text
 
 
 def build_recent_payments_text(recent_payments: list[tuple]) -> str:
@@ -178,6 +195,7 @@ def build_cabinet_text(
     student_name: str,
     directions: list[tuple],
     recent_payments: list[tuple],
+    student_id: int | None = None,
 ) -> str:
     total_balance = sum(direction[3] for direction in directions)
 
@@ -197,6 +215,17 @@ def build_cabinet_text(
             f"   Остаток: <b>{lesson_balance}</b> | Тариф: {format_tariff_type(tariff_type)}"
         )
 
+    if student_id is not None:
+        discount_percent = get_active_invitee_discount_percent(student_id)
+        if discount_percent:
+            lines.extend(
+                [
+                    "",
+                    f"🎁 <b>У вас активна реферальная скидка {discount_percent}%</b> "
+                    "на первое платное занятие.",
+                ]
+            )
+
     admin_text = build_admin_contacts_text()
 
     lines.extend(["", build_recent_payments_text(recent_payments)])
@@ -207,16 +236,10 @@ def build_cabinet_text(
 
 
 def build_admin_contacts_text() -> str:
-    admin_contacts = get_active_admin_contacts()
-    if not admin_contacts:
-        return ""
-    lines = ["<b>Напишите администратору:</b>"]
-    for telegram_id, full_name, username in admin_contacts:
-        if username:
-            lines.append(f"• <a href=\"https://t.me/{username}\">{full_name}</a>")
-        else:
-            lines.append(f"• <a href=\"tg://user?id={telegram_id}\">{full_name}</a>")
-    return "\n".join(lines)
+    return (
+        "<b>Напишите администратору:</b> "
+        "<a href=\"https://t.me/integral_school_ru\">@integral_school_ru</a>"
+    )
 
 
 def build_multi_students_warning(students_count: int) -> str:
@@ -235,6 +258,7 @@ def build_payment_caption(
     telegram_user_id: int | None,
     caption_text: str | None,
     status_text: str,
+    referral_discount_percent: int | None = None,
 ) -> str:
     text = (
         f"💳 <b>Оплата #{payment_request_id}</b>\n\n"
@@ -243,6 +267,12 @@ def build_payment_caption(
         f"🔗 <b>Username:</b> {username if username else 'не указан'}\n"
         f"🆔 <b>Telegram ID:</b> <code>{telegram_user_id if telegram_user_id else '-'}</code>"
     )
+
+    if referral_discount_percent:
+        text += (
+            f"\n🎁 <b>Реферальная скидка {referral_discount_percent}%</b> "
+            "— ученик платит первое занятие со скидкой, учтите при сверке суммы."
+        )
 
     if caption_text:
         text += f"\n💬 <b>Комментарий:</b> {caption_text}"

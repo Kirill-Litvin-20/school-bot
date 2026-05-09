@@ -292,7 +292,7 @@ def get_offers_menu_keyboard():
         inline_keyboard=[
             [InlineKeyboardButton(text="🎁 Бесплатная диагностика", callback_data="offer_free_diagnosis")],
             [InlineKeyboardButton(text="💰 Скидка на первый пакет", callback_data="offer_first_package")],
-            [InlineKeyboardButton(text="🎯 Скидка на первое занятие", callback_data="offer_first_lesson")],
+            [InlineKeyboardButton(text="🤝 Реферальная программа", callback_data="offer_referral_program")],
             [InlineKeyboardButton(text="← Назад в меню", callback_data="back_to_menu")],
         ]
     )
@@ -312,7 +312,7 @@ def get_cabinet_keyboard():
     """Клавиатура для личного кабинета ученика"""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплата", callback_data="menu_paid")],
+            [InlineKeyboardButton(text="✉️ Написать администратору", url="https://t.me/integral_school_ru")],
             [InlineKeyboardButton(text="🎁 Мой реферальный код", callback_data="show_referral_code")],
             [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
         ]

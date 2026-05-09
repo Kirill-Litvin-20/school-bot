@@ -112,6 +112,8 @@ from shared.database import (
     deactivate_review_card,
     get_current_debtors_summary,
     get_debtor_student_details,
+    get_referral_by_invitee_telegram_id,
+    link_invitee_student,
 )
 
 router = Router()
@@ -119,7 +121,7 @@ router.message.filter(F.chat.type == "private")
 router.callback_query.filter(F.message.chat.type == "private")
 logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-TEACHER_UPLOADS_DIR = PROJECT_ROOT / "school-bot" / "assets" / "teachers_uploaded"
+TEACHER_UPLOADS_DIR = PROJECT_ROOT / "assets" / "teachers_uploaded"
 try:
     MSK_TZ = ZoneInfo("Europe/Moscow")
 except Exception:
@@ -1764,6 +1766,17 @@ async def get_student_phone(message: Message, state: FSMContext):
             telegram_username=data.get("telegram_username"),
         )
 
+    referral_text = ""
+    if data["telegram_id"]:
+        if link_invitee_student(int(data["telegram_id"]), int(student_id)):
+            referral_row = get_referral_by_invitee_telegram_id(int(data["telegram_id"]))
+            inviter_tg = referral_row[1] if referral_row else None
+            referral_text = (
+                "\n\n🎁 Ученик пришёл по реферальной ссылке"
+                f" (приглашён tg_id={inviter_tg}). Ему будет применена скидка 20%"
+                " на первое платное занятие, пригласивший получит бонус после оплаты."
+            )
+
     onboarding_text = ""
     if not data["telegram_id"]:
         token = create_onboarding_invite(
@@ -1795,6 +1808,7 @@ async def get_student_phone(message: Message, state: FSMContext):
         f"Телефон: {phone if phone else '-'}\n"
         f"ID в базе: {student_id}\n"
         f"Роль student: {'создана' if data['telegram_id'] else 'будет создана после входа по ссылке'}"
+        f"{referral_text}"
         f"{onboarding_text}",
         reply_markup=get_admin_menu()
     )

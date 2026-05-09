@@ -472,6 +472,21 @@ def init_db():
         """
     )
 
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS referrals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inviter_telegram_id INTEGER NOT NULL,
+            invitee_telegram_id INTEGER NOT NULL UNIQUE,
+            invitee_student_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'captured',
+            created_at TEXT NOT NULL,
+            rewarded_at TEXT,
+            reward_balance_history_id INTEGER
+        )
+        """
+    )
+
     _ensure_postgres_bigint_columns(cur)
     _cleanup_teacher_profiles_for_non_teacher_users(cur)
     conn.commit()
@@ -547,6 +562,12 @@ def _ensure_students_table_columns(cur: sqlite3.Cursor):
     existing_columns = {row[1] for row in cur.fetchall()}
     if "telegram_username" not in existing_columns:
         cur.execute("ALTER TABLE students ADD COLUMN telegram_username TEXT")
+    if "referred_by_telegram_id" not in existing_columns:
+        cur.execute("ALTER TABLE students ADD COLUMN referred_by_telegram_id INTEGER")
+    if "first_paid_at" not in existing_columns:
+        cur.execute("ALTER TABLE students ADD COLUMN first_paid_at TEXT")
+    if "first_paid_payment_id" not in existing_columns:
+        cur.execute("ALTER TABLE students ADD COLUMN first_paid_payment_id INTEGER")
 
 
 def _ensure_users_table_columns(cur: sqlite3.Cursor):
@@ -563,7 +584,7 @@ def _ensure_postgres_bigint_columns(cur):
         return
 
     bigint_columns: dict[str, set[str]] = {
-        "students": {"telegram_id"},
+        "students": {"telegram_id", "referred_by_telegram_id"},
         "users": {"telegram_id"},
         "teachers": {"telegram_id"},
         "attendance": {"marked_by"},
@@ -574,6 +595,7 @@ def _ensure_postgres_bigint_columns(cur):
         "onboarding_invites": {"created_by", "used_by_telegram_id"},
         "publication_posts": {"created_by"},
         "review_cards": {"created_by"},
+        "referrals": {"inviter_telegram_id", "invitee_telegram_id"},
     }
 
     cur.execute(
@@ -1307,12 +1329,45 @@ def add_student_lesson(student_id: int, teacher_id: int, subject_name: str, less
     cur = conn.cursor()
 
     cur.execute(
+        "SELECT 1 FROM student_lessons WHERE student_id = ? LIMIT 1",
+        (student_id,),
+    )
+    is_first_direction = cur.fetchone() is None
+
+    diagnostic_added = False
+    if is_first_direction and lesson_balance < 1:
+        # New students get one free diagnostic lesson on the very first
+        # direction so the cabinet immediately shows balance >= 1. The bonus
+        # is logged separately in balance_history for traceability.
+        lesson_balance = 1
+        diagnostic_added = True
+
+    cur.execute(
         """
         INSERT INTO student_lessons (student_id, teacher_id, subject_name, lesson_balance, tariff_type)
         VALUES (?, ?, ?, ?, ?)
         """,
         (student_id, teacher_id, subject_name, lesson_balance, tariff_type)
     )
+    new_lesson_id = cur.lastrowid
+
+    if is_first_direction and new_lesson_id:
+        cur.execute(
+            """
+            INSERT INTO balance_history (
+                student_lesson_id, operation_type, lessons_delta,
+                comment, created_at, created_by
+            ) VALUES (?, 'diagnostic_lesson', ?, ?, ?, ?)
+            """,
+            (
+                new_lesson_id,
+                1 if diagnostic_added else lesson_balance,
+                "Бесплатная диагностика" if diagnostic_added
+                else "Стартовый баланс при создании направления",
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                None,
+            ),
+        )
 
     conn.commit()
     conn.close()
@@ -2121,6 +2176,309 @@ def mark_onboarding_invite_used(invite_id: int, telegram_id: int):
     )
     conn.commit()
     conn.close()
+
+
+REFERRAL_INVITEE_DISCOUNT_PERCENT = 20
+REFERRAL_INVITER_BONUS_LESSONS = 1
+
+
+def capture_referral(inviter_telegram_id: int, invitee_telegram_id: int) -> bool:
+    """Record a referral the moment an invitee opens /start ref_<inviter>.
+
+    Idempotent: silently skips self-referrals and any case where the invitee
+    already has a referral row (first inviter wins). Returns True if a new row
+    was inserted, False otherwise.
+    """
+    if not inviter_telegram_id or not invitee_telegram_id:
+        return False
+    if int(inviter_telegram_id) == int(invitee_telegram_id):
+        return False
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT 1 FROM referrals WHERE invitee_telegram_id = ? LIMIT 1",
+            (int(invitee_telegram_id),),
+        )
+        if cur.fetchone():
+            return False
+
+        cur.execute(
+            """
+            INSERT INTO referrals (
+                inviter_telegram_id,
+                invitee_telegram_id,
+                status,
+                created_at
+            ) VALUES (?, ?, 'captured', ?)
+            """,
+            (
+                int(inviter_telegram_id),
+                int(invitee_telegram_id),
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            ),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def get_referral_by_invitee_telegram_id(invitee_telegram_id: int):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, inviter_telegram_id, invitee_telegram_id,
+               invitee_student_id, status, created_at, rewarded_at,
+               reward_balance_history_id
+        FROM referrals
+        WHERE invitee_telegram_id = ?
+        LIMIT 1
+        """,
+        (int(invitee_telegram_id),),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def link_invitee_student(invitee_telegram_id: int, student_id: int) -> bool:
+    """Tie a captured referral to the freshly-created student card and also
+    backfill students.referred_by_telegram_id for fast lookup.
+    """
+    referral = get_referral_by_invitee_telegram_id(invitee_telegram_id)
+    if not referral:
+        return False
+
+    referral_id, inviter_tg, _, existing_student_id, status, *_ = referral
+    if status not in ("captured", "student_linked"):
+        return False
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE referrals
+            SET invitee_student_id = ?,
+                status = CASE
+                    WHEN status = 'captured' THEN 'student_linked'
+                    ELSE status
+                END
+            WHERE id = ?
+            """,
+            (int(student_id), int(referral_id)),
+        )
+        cur.execute(
+            """
+            UPDATE students
+            SET referred_by_telegram_id = ?
+            WHERE id = ?
+            """,
+            (int(inviter_tg), int(student_id)),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def get_active_invitee_discount_percent(student_id: int) -> int | None:
+    """Return discount percent for an invitee whose first paid lesson hasn't
+    been counted yet. None when no discount applies.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT referred_by_telegram_id, first_paid_at
+        FROM students
+        WHERE id = ?
+        LIMIT 1
+        """,
+        (int(student_id),),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    referred_by, first_paid_at = row
+    if not referred_by:
+        return None
+    if first_paid_at:
+        return None
+    return REFERRAL_INVITEE_DISCOUNT_PERCENT
+
+
+def get_oldest_direction_for_telegram_id(telegram_id: int):
+    """Return the oldest student_lesson row owned by the student bound to this
+    telegram_id (the row a referral bonus should be credited to). Tuple shape
+    matches get_student_lesson_by_id: (id, student_id, teacher_id,
+    subject_name, lesson_balance, tariff_type, student_name, teacher_name).
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT sl.id, sl.student_id, sl.teacher_id, sl.subject_name,
+               sl.lesson_balance, sl.tariff_type, s.full_name, t.full_name
+        FROM student_lessons sl
+        JOIN students s ON s.id = sl.student_id
+        JOIN teachers t ON t.id = sl.teacher_id
+        WHERE s.telegram_id = ?
+        ORDER BY sl.id ASC
+        LIMIT 1
+        """,
+        (int(telegram_id),),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def attach_first_payment(student_id: int, payment_request_id: int) -> bool:
+    """Mark the very first paid payment for the student. No-op if already set."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE students
+            SET first_paid_at = ?,
+                first_paid_payment_id = ?
+            WHERE id = ?
+              AND first_paid_at IS NULL
+            """,
+            (
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                int(payment_request_id),
+                int(student_id),
+            ),
+        )
+        changed = cur.rowcount > 0
+        conn.commit()
+        return changed
+    except Exception:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def award_referral_bonus_to_inviter(
+    invitee_student_id: int,
+    bonus_lessons: int = REFERRAL_INVITER_BONUS_LESSONS,
+    admin_id: int | None = None,
+) -> dict | None:
+    """Find the referral row for this invitee, credit `bonus_lessons` to the
+    inviter's oldest direction, write balance_history, flip referral status to
+    'rewarded'. Idempotent: returns None if no eligible referral exists or if
+    the inviter has no directions yet.
+
+    Returns a dict describing what was credited (used to compose the
+    notification): {inviter_telegram_id, direction_id, subject_name,
+    teacher_name, lessons_added}. The caller is responsible for sending the
+    Telegram message — this function only touches the DB.
+    """
+    if bonus_lessons <= 0:
+        return None
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, inviter_telegram_id, status
+        FROM referrals
+        WHERE invitee_student_id = ?
+          AND status = 'student_linked'
+        LIMIT 1
+        """,
+        (int(invitee_student_id),),
+    )
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+    referral_id, inviter_tg, _ = row
+
+    inviter_direction = get_oldest_direction_for_telegram_id(int(inviter_tg))
+    if not inviter_direction:
+        return None
+
+    direction_id = int(inviter_direction[0])
+    subject_name = inviter_direction[3]
+    teacher_name = inviter_direction[7]
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE student_lessons
+            SET lesson_balance = lesson_balance + ?
+            WHERE id = ?
+            """,
+            (int(bonus_lessons), direction_id),
+        )
+        if cur.rowcount == 0:
+            conn.rollback()
+            return None
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute(
+            """
+            INSERT INTO balance_history (
+                student_lesson_id, operation_type, lessons_delta,
+                comment, created_at, created_by
+            ) VALUES (?, 'referral_inviter_bonus', ?, ?, ?, ?)
+            """,
+            (
+                direction_id,
+                int(bonus_lessons),
+                f"Реферальный бонус за приглашённого ученика #{int(invitee_student_id)}",
+                now,
+                admin_id,
+            ),
+        )
+        bonus_history_id = cur.lastrowid
+
+        cur.execute(
+            """
+            UPDATE referrals
+            SET status = 'rewarded',
+                rewarded_at = ?,
+                reward_balance_history_id = ?
+            WHERE id = ?
+              AND status = 'student_linked'
+            """,
+            (now, bonus_history_id, int(referral_id)),
+        )
+        if cur.rowcount == 0:
+            conn.rollback()
+            return None
+
+        conn.commit()
+        return {
+            "inviter_telegram_id": int(inviter_tg),
+            "direction_id": direction_id,
+            "subject_name": subject_name,
+            "teacher_name": teacher_name,
+            "lessons_added": int(bonus_lessons),
+        }
+    except Exception:
+        conn.rollback()
+        return None
+    finally:
+        conn.close()
 
 
 def bind_student_telegram_by_id(
