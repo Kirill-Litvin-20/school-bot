@@ -1,0 +1,25 @@
+[Unit]
+Description=School (student) bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/school-system
+EnvironmentFile=/opt/school-system/.env
+ExecStart=/usr/bin/env python3 /opt/school-system/school-bot/bot.py
+Restart=always
+RestartSec=5
+
+# Use journald for logs (logging_setup auto-detects INVOCATION_ID and skips
+# the on-disk log file when running under systemd).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=school-bot
+
+# Hardening (safe defaults; tighten later if needed).
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

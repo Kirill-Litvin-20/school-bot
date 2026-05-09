@@ -31,6 +31,7 @@ from shared.database import (
     mark_daily_debt_report_sent,
     run_startup_maintenance_from_env,
 )
+from shared.health import start_health_server
 from shared.logging_setup import get_log_settings, setup_logging
 
 
@@ -334,6 +335,19 @@ async def main():
             exc,
         )
     dp.include_router(router)
+
+    health_runner, health_state = await start_health_server(
+        app_name="school_admin_bot",
+        port_env="SCHOOL_ADMIN_HEALTH_PORT",
+    )
+
+    @dp.update.outer_middleware()
+    async def _touch_health(handler, event, data):
+        try:
+            return await handler(event, data)
+        finally:
+            health_state.touch()
+
     report_task = asyncio.create_task(debt_report_worker())
     publication_task = asyncio.create_task(publication_worker())
     cleanup_task = asyncio.create_task(cleanup_worker())
@@ -358,6 +372,8 @@ async def main():
             await publication_task
         with contextlib.suppress(asyncio.CancelledError):
             await cleanup_task
+        if health_runner is not None:
+            await health_runner.cleanup()
 
 
 if __name__ == "__main__":

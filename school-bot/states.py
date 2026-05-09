@@ -10,7 +10,6 @@ class ApplicationForm(StatesGroup):
     review_card = State()
 
     payment_proof = State()
-    payment_manual_amount = State()
 
     name = State()
     school_class = State()

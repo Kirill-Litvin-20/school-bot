@@ -1,0 +1,13 @@
+[Unit]
+Description=School-system Postgres dump
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/school-system
+ExecStart=/opt/school-system/scripts/backup_postgres.sh
+# Keep stdout/stderr in the journal so `journalctl -u school-backup` shows the
+# last run.
+StandardOutput=journal
+StandardError=journal

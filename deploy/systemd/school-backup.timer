@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily school-system Postgres dump
+
+[Timer]
+# Fire daily at 03:00 server time. If the machine was off, run once on next boot.
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+Unit=school-backup.service
+
+[Install]
+WantedBy=timers.target

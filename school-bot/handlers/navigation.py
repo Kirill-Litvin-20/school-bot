@@ -1,7 +1,7 @@
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from keyboards import (
     get_main_menu_keyboard,
@@ -9,12 +9,15 @@ from keyboards import (
     get_offers_menu_keyboard,
     get_offer_application_keyboard,
     get_cabinet_keyboard,
+    get_faq_menu_keyboard,
+    get_faq_back_keyboard,
 )
 from shared.database import get_teacher_catalog_subjects
 from shared.database import (
     add_user,
     bind_student_telegram_by_id,
     bind_teacher_telegram_by_id,
+    capture_referral,
     find_students_by_telegram_id,
     get_latest_student_by_username,
     get_onboarding_invite_by_token,
@@ -80,6 +83,24 @@ async def start_handler(message: Message, state: FSMContext):
     if start_payload.lower().startswith("ref_"):
         referral_code = start_payload[4:].strip()
         await state.update_data(referral_code=referral_code)
+        try:
+            inviter_tg = int(referral_code)
+        except (TypeError, ValueError):
+            inviter_tg = None
+        if inviter_tg:
+            captured = capture_referral(
+                inviter_telegram_id=inviter_tg,
+                invitee_telegram_id=message.from_user.id,
+            )
+            if captured:
+                await message.answer(
+                    "🎉 Вы пришли по приглашению друга!\n\n"
+                    "После того как вы оплатите своё первое занятие "
+                    "(вне бесплатной диагностики), вы получите "
+                    "<b>20% скидку</b> на этот платёж, "
+                    "а пригласивший — бонусное занятие.",
+                    parse_mode="HTML",
+                )
 
     if start_payload.lower().startswith("invite_"):
         token = start_payload[len("invite_"):].strip()
@@ -230,22 +251,7 @@ async def menu_cabinet(callback: CallbackQuery, state: FSMContext):
         limit=4,
     )
 
-    if not directions:
-        warning = build_multi_students_warning(len(students))
-        admin_contacts_text = build_admin_contacts_text()
-        await callback.message.answer(
-            f"👤 <b>Личный кабинет</b>\n\n"
-            f"<b>Ученик:</b> {student_name}\n"
-            f"Активные направления пока отсутствуют.\n\n"
-            f"{build_recent_payments_text(recent_payments)}\n\n"
-            f"{admin_contacts_text if admin_contacts_text else ''}{warning}",
-            parse_mode="HTML",
-            reply_markup=get_cabinet_keyboard(),
-        )
-        await callback.answer()
-        return
-
-    text = build_cabinet_text(student_name, directions, recent_payments)
+    text = build_cabinet_text(student_name, directions, recent_payments, student_id=student_id)
     text += build_multi_students_warning(len(students))
     await callback.message.answer(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard())
     await callback.answer()
@@ -360,16 +366,17 @@ async def show_referral_code(callback: CallbackQuery):
     referral_link = f"https://t.me/integral_school_ru_bot?start=ref_{telegram_id}"
 
     await callback.message.answer(
-        f"🎁 <b>ВАШ РЕФЕРАЛЬНЫЙ КОД</b>\n\n"
-        f"Отправьте эту ссылку друзьям и получайте скидки!\n\n"
+        "🎁 <b>ВАШ РЕФЕРАЛЬНЫЙ КОД</b>\n\n"
+        "Отправьте эту ссылку друзьям:\n\n"
         f"<code>{referral_link}</code>\n\n"
-        f"<b>Как это работает:</b>\n"
-        f"1️⃣ Друг переходит по вашей ссылке\n"
-        f"2️⃣ Оставляет заявку и оплачивает первое занятие\n"
-        f"3️⃣ Вы получаете <b>20% скидку</b> на следующее занятие\n"
-        f"4️⃣ Ваш друг получает <b>10% скидку</b>\n\n"
-        f"✨ Начните приглашать друзей и зарабатывайте скидки!",
-        parse_mode="HTML"
+        "<b>Как это работает:</b>\n"
+        "1️⃣ Друг переходит по вашей ссылке и оставляет заявку.\n"
+        "2️⃣ Проходит бесплатную диагностику.\n"
+        "3️⃣ Оплачивает первое платное занятие со <b>скидкой 20%</b>.\n"
+        "4️⃣ После подтверждения этой оплаты вам автоматически "
+        "начисляется <b>+1 бесплатное занятие</b>.\n\n"
+        "Бонус будет списан с ближайшего проведённого занятия.",
+        parse_mode="HTML",
     )
     await callback.answer()
 
@@ -424,22 +431,163 @@ async def show_first_package(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(lambda c: c.data == "offer_first_lesson")
-async def show_first_lesson(callback: CallbackQuery):
-    """Показать информацию о скидке на первое занятие"""
+@router.callback_query(lambda c: c.data == "menu_faq")
+async def show_faq_menu(callback: CallbackQuery):
     text = (
-        "🎯 <b>СКИДКА НА ПЕРВОЕ ЗАНЯТИЕ</b>\n\n"
-        "Начните обучение с выгодой! <b>Специальная скидка</b> ждёт вас на первое занятие!\n\n"
-        "Это отличный способ:\n"
-        "✅ Убедиться в качестве нашего обучения\n"
-        "✅ Познакомиться с преподавателем\n"
-        "✅ Узнать методику преподавания\n"
-        "✅ Сэкономить на первом шаге\n\n"
-        "<b>Как получить?</b>\n"
-        "1. Оставьте заявку\n"
-        "2. Выберите удобное время и предмет\n"
-        "3. Скидка автоматически применяется\n\n"
-        "<i>Скидка доступна один раз при первом занятии!</i>"
+        "❓ <b>ПОМОЩЬ И ЧАСТЫЕ ВОПРОСЫ</b>\n\n"
+        "Выберите интересующий вопрос — ниже короткие ответы. "
+        "Если ответа нет, нажмите «← В меню» → «👤 Личный кабинет» → "
+        "«✉️ Написать администратору»."
     )
-    await callback.message.edit_text(text, reply_markup=get_offer_application_keyboard("first_lesson"), parse_mode="HTML")
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=get_faq_menu_keyboard(),
+            parse_mode="HTML",
+        )
+    except Exception:
+        await callback.message.answer(
+            text,
+            reply_markup=get_faq_menu_keyboard(),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "faq_pay")
+async def faq_pay(callback: CallbackQuery):
+    from config import (
+        PAYMENT_ACCOUNT_HOLDER,
+        PAYMENT_BANK_NAME,
+        PAYMENT_BANK_NUMBER,
+    )
+
+    text = (
+        "💳 <b>КАК ОПЛАТИТЬ ЗАНЯТИЯ</b>\n\n"
+        "<b>Реквизиты:</b>\n"
+        f"🏦 Номер счёта: <code>{PAYMENT_BANK_NUMBER}</code>\n"
+        f"🏢 Банк: {PAYMENT_BANK_NAME}\n"
+        f"👤 Получатель: {PAYMENT_ACCOUNT_HOLDER}\n\n"
+        "<b>Порядок:</b>\n"
+        "1. Сделайте перевод на указанные реквизиты.\n"
+        "2. В комментарии к переводу укажите имя ученика.\n"
+        "3. Откройте раздел оплаты в боте (👤 Личный кабинет → 💳 Оплата) "
+        "и пришлите фото или PDF-чека.\n"
+        "4. После проверки администратором занятия начислятся на ваш баланс, "
+        "вам придёт уведомление.\n\n"
+        "💡 Если у вас активна реферальная скидка 20%, она будет учтена. "
+        "Заплатите на 20% меньше указанной в прайсе суммы."
+    )
+    await callback.message.edit_text(text, reply_markup=get_faq_back_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "faq_package")
+async def faq_package(callback: CallbackQuery):
+    text = (
+        "📦 <b>ЧТО ТАКОЕ ПАКЕТ ЗАНЯТИЙ</b>\n\n"
+        "Пакет — это сразу несколько занятий, оплаченных одним платежом, "
+        "по более выгодной цене за одно занятие.\n\n"
+        "Чем больше пакет, тем ниже цена за каждое занятие. "
+        "Конкретные размеры пакетов и цены можно увидеть в разделе оплаты "
+        "(👤 Личный кабинет → 💳 Оплата) — там приходит фото с актуальным "
+        "прайсом.\n\n"
+        "💡 Все занятия из пакета хранятся на вашем балансе и расходуются по мере "
+        "проведения. Срок годности занятий не сгорает."
+    )
+    await callback.message.edit_text(text, reply_markup=get_faq_back_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "faq_reschedule")
+async def faq_reschedule(callback: CallbackQuery):
+    text = (
+        "🔄 <b>ПЕРЕНОС И ОТМЕНА ЗАНЯТИЙ</b>\n\n"
+        "Перенести или отменить занятие можно <b>не позже чем за 6 часов</b> "
+        "до его начала. В этом случае занятие не списывается с баланса.\n\n"
+        "Если предупредить менее чем за 6 часов (или вообще не прийти), "
+        "<b>занятие списывается с баланса</b> как проведённое.\n\n"
+        "<b>Куда сообщать:</b>\n"
+        "• своему преподавателю напрямую,\n"
+        "• или администратору школы (👤 Личный кабинет → ✉️ Написать "
+        "администратору).\n\n"
+        "💡 Чем раньше вы предупредите — тем проще найти удобный новый слот."
+    )
+    await callback.message.edit_text(text, reply_markup=get_faq_back_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "faq_referral")
+async def faq_referral(callback: CallbackQuery):
+    text = (
+        "🎁 <b>РЕФЕРАЛЬНАЯ ПРОГРАММА — КРАТКО</b>\n\n"
+        "<b>Вы приглашаете друга</b> по своей ссылке.\n\n"
+        "Друг получает:\n"
+        "✅ бесплатное диагностическое занятие;\n"
+        "✅ скидку <b>20%</b> на своё первое платное занятие.\n\n"
+        "Вы получаете:\n"
+        "✅ <b>+1 бесплатное занятие</b> на свой баланс — после того, как друг "
+        "оплатит первое занятие. Бонус автоматически списывается на ближайшем "
+        "проведённом занятии.\n\n"
+        "Свою ссылку возьмите в «👤 Личный кабинет» → «🎁 Мой реферальный код»."
+    )
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🎁 Открыть мой реферальный код", callback_data="show_referral_code")],
+                [InlineKeyboardButton(text="← К списку вопросов", callback_data="menu_faq")],
+                [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+            ]
+        ),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "faq_link")
+async def faq_link(callback: CallbackQuery):
+    text = (
+        "👤 <b>ПРИВЯЗКА АККАУНТА</b>\n\n"
+        "Когда администратор заводит вашу карточку, он использует ваш Telegram "
+        "@username или ссылку для автоматической привязки.\n\n"
+        "Если в Личном кабинете написано «Мы пока не нашли вас в базе» — "
+        "значит ваш Telegram-аккаунт ещё не привязан к карточке ученика. "
+        "Напишите администратору (✉️ Написать администратору), и он привяжет "
+        "вас вручную или пришлёт ссылку для автоматической привязки.\n\n"
+        "💡 После смены @username в Telegram карточку нужно перепривязать — "
+        "тоже через администратора."
+    )
+    await callback.message.edit_text(text, reply_markup=get_faq_back_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "offer_referral_program")
+async def show_referral_program(callback: CallbackQuery):
+    """Показать информацию о реферальной программе"""
+    text = (
+        "🤝 <b>РЕФЕРАЛЬНАЯ ПРОГРАММА</b>\n\n"
+        "Приглашайте друзей в школу и получайте бонусные занятия!\n\n"
+        "<b>Что получает приглашённый:</b>\n"
+        "✅ Бесплатную диагностику (1 занятие на балансе сразу при заведении).\n"
+        "✅ <b>Скидку 20%</b> на первое платное занятие после диагностики.\n\n"
+        "<b>Что получаете вы:</b>\n"
+        "✅ <b>+1 бесплатное занятие</b> после того, как приглашённый оплатит "
+        "своё первое занятие. Бонус автоматически списывается на ближайшем "
+        "проведённом занятии.\n\n"
+        "<b>Где взять свою ссылку?</b>\n"
+        "Откройте «👤 Личный кабинет» → «🎁 Мой реферальный код». "
+        "Скопируйте ссылку и отправьте другу.\n\n"
+        "Уведомление о начисленном бонусе придёт автоматически в этот чат."
+    )
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🎁 Открыть мой реферальный код", callback_data="show_referral_code")],
+                [InlineKeyboardButton(text="← Назад", callback_data="menu_offers")],
+            ]
+        ),
+        parse_mode="HTML",
+    )
     await callback.answer()

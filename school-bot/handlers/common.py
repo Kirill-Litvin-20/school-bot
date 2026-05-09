@@ -11,7 +11,13 @@ from keyboards import (
     get_teacher_card_keyboard,
 )
 from states import ApplicationForm
-from shared.database import get_active_admin_contacts, get_active_review_cards, get_teacher_cards_by_subject
+from shared.database import (
+    get_active_invitee_discount_percent,
+    get_active_review_cards,
+    get_attendance_summary_for_student,
+    get_recent_attendance_for_student,
+    get_teacher_cards_by_subject,
+)
 
 BOT_DIR = Path(__file__).resolve().parent.parent.parent  # Points to /opt/school-system/
 
@@ -116,6 +122,13 @@ def _get_photo_media(photo_ref: str | None):
     resolved = Path(resolve_local_path(photo_ref))
     if resolved.exists():
         return FSInputFile(str(resolved))
+    import logging
+    logging.warning(
+        "Teacher photo file not found locally, falling back to telegram ref. "
+        "stored=%s resolved=%s",
+        photo_ref,
+        resolved,
+    )
     return photo_ref
 
 
@@ -129,6 +142,7 @@ def format_payment_status(status: str) -> str:
         "processing": "На проверке",
         "approved": "Подтверждена",
         "rejected": "Отклонена",
+        "expired": "Просрочена",
     }.get(status, status)
 
 
@@ -140,7 +154,7 @@ def build_application_text(data: dict) -> str:
     subjects = data.get("subjects", [])
     subjects_text = ", ".join(subjects) if subjects else "-"
 
-    return (
+    text = (
         "📌 <b>Новая заявка</b>\n\n"
         f"👤 <b>Кто оставил заявку:</b> {data.get('user_type', '-')}\n"
         f"📝 <b>Имя:</b> {data.get('name', '-')}\n"
@@ -153,6 +167,12 @@ def build_application_text(data: dict) -> str:
         f"🔗 <b>Контакт:</b> {data.get('contact_value', '-')}\n"
         f"💬 <b>Комментарий:</b> {data.get('comment', '-')}"
     )
+
+    referral_code = data.get("referral_code")
+    if referral_code:
+        text += f"\n🎁 <b>Реферал от:</b> tg_id={referral_code}"
+
+    return text
 
 
 def build_recent_payments_text(recent_payments: list[tuple]) -> str:
@@ -174,49 +194,127 @@ def build_recent_payments_text(recent_payments: list[tuple]) -> str:
     return "\n".join(lines)
 
 
+def _format_attendance_status(status: str) -> str:
+    return {
+        "present": "✅ был",
+        "completed": "✅ был",
+        "absent": "❌ пропуск",
+        "missed": "❌ пропуск",
+        "skipped": "❌ пропуск",
+        "cancelled": "↩️ отменено",
+    }.get(status, status or "—")
+
+
 def build_cabinet_text(
     student_name: str,
     directions: list[tuple],
     recent_payments: list[tuple],
+    student_id: int | None = None,
 ) -> str:
-    total_balance = sum(direction[3] for direction in directions)
+    positive_balance = sum(d[3] for d in directions if d[3] > 0)
+    debt_total = sum(-d[3] for d in directions if d[3] < 0)
 
     lines = [
-        "👤 <b>Личный кабинет</b>",
+        "╔══════════════════════════╗",
+        "  👤 <b>ЛИЧНЫЙ КАБИНЕТ</b>",
+        "╚══════════════════════════╝",
         "",
-        f"<b>Ученик:</b> {student_name}",
-        f"<b>Всего занятий на балансе:</b> {total_balance}",
+        f"👋 <b>{student_name}</b>",
         "",
-        "📚 <b>Ваши направления:</b>",
+        "<b>📊 Сводка</b>",
+        f"   • Занятий на балансе: <b>{positive_balance}</b>",
     ]
+    if debt_total > 0:
+        lines.append(f"   • Задолженность: <b>{debt_total}</b> занятий ⚠️")
+    else:
+        lines.append("   • Задолженность: нет ✅")
 
-    for index, direction in enumerate(directions, start=1):
-        _, teacher_name, subject_name, lesson_balance, tariff_type = direction
-        lines.append(
-            f"{index}. {subject_name} — {teacher_name}\n"
-            f"   Остаток: <b>{lesson_balance}</b> | Тариф: {format_tariff_type(tariff_type)}"
+    if student_id is not None:
+        discount_percent = get_active_invitee_discount_percent(student_id)
+        if discount_percent:
+            lines.append(
+                f"   • 🎁 Активна реферальная скидка <b>{discount_percent}%</b> "
+                "на первое платное занятие"
+            )
+
+    if directions:
+        lines.extend(["", "<b>📚 Ваши направления</b>"])
+        for index, direction in enumerate(directions, start=1):
+            _, teacher_name, subject_name, lesson_balance, tariff_type = direction
+            if lesson_balance < 0:
+                balance_view = f"долг <b>{-lesson_balance}</b> ⚠️"
+            else:
+                balance_view = f"остаток <b>{lesson_balance}</b>"
+            lines.append(
+                f"   {index}. <b>{subject_name}</b> — {teacher_name}\n"
+                f"       {balance_view} • {format_tariff_type(tariff_type)}"
+            )
+    else:
+        lines.extend(
+            [
+                "",
+                "<b>📚 Ваши направления</b>",
+                "   Активные направления пока не назначены.",
+            ]
         )
 
-    admin_text = build_admin_contacts_text()
+    if student_id is not None and directions:
+        attendance_rows = get_attendance_summary_for_student(student_id)
+        if any(row["total"] > 0 for row in attendance_rows):
+            lines.extend(["", "<b>🎓 Посещаемость</b>"])
+            for row in attendance_rows:
+                if row["total"] == 0:
+                    continue
+                last_seen = row["last_lesson_date"]
+                last_seen_view = (last_seen or "—")[:10] if last_seen else "—"
+                lines.append(
+                    f"   • <b>{row['subject_name']}</b> — {row['teacher_name']}\n"
+                    f"       посещено: <b>{row['attended']}</b>"
+                    f" • пропуски: <b>{row['missed']}</b>"
+                    f" • последнее: {last_seen_view}"
+                )
 
-    lines.extend(["", build_recent_payments_text(recent_payments)])
+        recent = get_recent_attendance_for_student(student_id, limit=5)
+        if recent:
+            lines.extend(["", "<b>🗓 Последние занятия</b>"])
+            for entry in recent:
+                date_view = (entry["lesson_date"] or "—")[:10]
+                lines.append(
+                    f"   • {date_view} — {entry['subject_name']} ({entry['teacher_name']}): "
+                    f"{_format_attendance_status(entry['status'])}"
+                )
+
+    lines.extend(["", "<b>💳 Последние оплаты</b>"])
+    payments_block = build_recent_payments_text(recent_payments)
+    payments_lines = payments_block.splitlines()
+    # `build_recent_payments_text` already prefixes its own header that we
+    # don't need here — drop it but keep the body.
+    if payments_lines and payments_lines[0].startswith("<b>Последние оплаты"):
+        payments_lines = payments_lines[1:]
+    if not payments_lines:
+        lines.append("   История оплат пока отсутствует.")
+    else:
+        for line in payments_lines:
+            lines.append(f"   {line}" if line else line)
+
+    admin_text = build_admin_contacts_text()
     if admin_text:
         lines.extend(["", admin_text])
-    lines.extend(["", "Если информация отображается некорректно, пожалуйста, обратитесь к администратору."])
+
+    lines.extend(
+        [
+            "",
+            "<i>Если в данных есть ошибка — напишите администратору.</i>",
+        ]
+    )
     return "\n".join(lines)
 
 
 def build_admin_contacts_text() -> str:
-    admin_contacts = get_active_admin_contacts()
-    if not admin_contacts:
-        return ""
-    lines = ["<b>Напишите администратору:</b>"]
-    for telegram_id, full_name, username in admin_contacts:
-        if username:
-            lines.append(f"• <a href=\"https://t.me/{username}\">{full_name}</a>")
-        else:
-            lines.append(f"• <a href=\"tg://user?id={telegram_id}\">{full_name}</a>")
-    return "\n".join(lines)
+    return (
+        "<b>Напишите администратору:</b> "
+        "<a href=\"https://t.me/integral_school_ru\">@integral_school_ru</a>"
+    )
 
 
 def build_multi_students_warning(students_count: int) -> str:
@@ -235,6 +333,7 @@ def build_payment_caption(
     telegram_user_id: int | None,
     caption_text: str | None,
     status_text: str,
+    referral_discount_percent: int | None = None,
 ) -> str:
     text = (
         f"💳 <b>Оплата #{payment_request_id}</b>\n\n"
@@ -243,6 +342,12 @@ def build_payment_caption(
         f"🔗 <b>Username:</b> {username if username else 'не указан'}\n"
         f"🆔 <b>Telegram ID:</b> <code>{telegram_user_id if telegram_user_id else '-'}</code>"
     )
+
+    if referral_discount_percent:
+        text += (
+            f"\n🎁 <b>Реферальная скидка {referral_discount_percent}%</b> "
+            "— ученик платит первое занятие со скидкой, учтите при сверке суммы."
+        )
 
     if caption_text:
         text += f"\n💬 <b>Комментарий:</b> {caption_text}"
