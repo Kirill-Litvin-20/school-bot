@@ -1562,6 +1562,80 @@ def get_balance_history_by_student(student_id: int):
     return rows
 
 
+def get_attendance_summary_for_student(student_id: int) -> list[dict]:
+    """Per-direction attendance aggregates used in the student cabinet."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            sl.id,
+            sl.subject_name,
+            t.full_name,
+            COALESCE(SUM(CASE WHEN a.status IN ('present','completed') THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN a.status IN ('absent','missed','skipped') THEN 1 ELSE 0 END), 0),
+            COALESCE(COUNT(a.id), 0),
+            MAX(a.lesson_date)
+        FROM student_lessons sl
+        JOIN teachers t ON t.id = sl.teacher_id
+        LEFT JOIN attendance a ON a.student_lesson_id = sl.id
+        WHERE sl.student_id = ?
+        GROUP BY sl.id, sl.subject_name, t.full_name
+        ORDER BY sl.id
+        """,
+        (int(student_id),),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    result: list[dict] = []
+    for row in rows:
+        result.append(
+            {
+                "direction_id": int(row[0]),
+                "subject_name": (row[1] or "").strip() or "-",
+                "teacher_name": (row[2] or "").strip() or "-",
+                "attended": int(row[3] or 0),
+                "missed": int(row[4] or 0),
+                "total": int(row[5] or 0),
+                "last_lesson_date": row[6],
+            }
+        )
+    return result
+
+
+def get_recent_attendance_for_student(student_id: int, limit: int = 5) -> list[dict]:
+    """Most recent attendance entries across all directions of a student."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            a.lesson_date,
+            a.status,
+            sl.subject_name,
+            t.full_name
+        FROM attendance a
+        JOIN student_lessons sl ON sl.id = a.student_lesson_id
+        JOIN teachers t ON t.id = sl.teacher_id
+        WHERE sl.student_id = ?
+        ORDER BY a.id DESC
+        LIMIT ?
+        """,
+        (int(student_id), int(limit)),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {
+            "lesson_date": row[0],
+            "status": row[1],
+            "subject_name": (row[2] or "").strip() or "-",
+            "teacher_name": (row[3] or "").strip() or "-",
+        }
+        for row in rows
+    ]
+
+
 def mark_attendance(direction_id: int, status: str, marked_by: int):
     conn = get_connection()
     cur = conn.cursor()
