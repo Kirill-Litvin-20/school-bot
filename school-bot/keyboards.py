@@ -63,7 +63,6 @@ def get_user_type_keyboard():
 def get_main_menu_keyboard():
     buttons = [
         [InlineKeyboardButton(text="📝 Оставить заявку", callback_data="menu_signup")],
-        [InlineKeyboardButton(text="💳 Оплатить занятия", callback_data="menu_paid")],
         [InlineKeyboardButton(text="👨‍🏫 Преподаватели", callback_data="menu_teachers")],
         [InlineKeyboardButton(text="🎁 Акции и предложения", callback_data="menu_offers")],
         [InlineKeyboardButton(text="⭐ Отзывы", callback_data="menu_reviews")],
@@ -336,6 +335,7 @@ def get_cabinet_keyboard():
     """Клавиатура для личного кабинета ученика"""
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Оплатить занятия", callback_data="menu_paid")],
             [InlineKeyboardButton(text="✉️ Написать администратору", url="https://t.me/integral_school_ru")],
             [InlineKeyboardButton(text="🎁 Мой реферальный код", callback_data="show_referral_code")],
             [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
