@@ -262,7 +262,13 @@ async def choose_teacher_mode(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(ApplicationForm.teacher_name, lambda c: c.data.startswith("pick_teacher_"))
 async def choose_teacher_name(callback: CallbackQuery, state: FSMContext):
-    teacher_name = callback.data.split("pick_teacher_", 1)[1]
+    idx_str = callback.data.split("pick_teacher_", 1)[1]
+    teachers = get_all_teacher_names()
+    try:
+        teacher_name = teachers[int(idx_str)]
+    except (ValueError, IndexError):
+        await callback.answer("Преподаватель не найден, попробуйте снова.", show_alert=True)
+        return
     await state.update_data(teacher_name=teacher_name)
 
     await callback.message.answer(

@@ -224,9 +224,9 @@ def get_teachers_keyboard():
         buttons.append(get_back_button())
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    for teacher in teachers:
+    for idx, teacher in enumerate(teachers):
         buttons.append(
-            [InlineKeyboardButton(text=teacher, callback_data=f"pick_teacher_{teacher}")]
+            [InlineKeyboardButton(text=teacher, callback_data=f"pick_teacher_{idx}")]
         )
 
     buttons.append(get_back_button())
