@@ -30,8 +30,10 @@ router.callback_query.filter(F.message.chat.type == "private")
 @router.callback_query(ApplicationForm.menu, lambda c: c.data == "menu_signup")
 async def menu_signup(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await state.set_state(ApplicationForm.user_type)
-    await callback.message.answer("👤 Пожалуйста, напишите, как к Вам обращаться.")
+    await callback.message.answer(
+        "Пожалуйста, напишите, кто оставляет заявку — <b>ученик</b> или <b>родитель</b>.",
+        parse_mode="HTML",
+    )
     await state.set_state(ApplicationForm.user_type)
     await callback.answer()
 
@@ -258,9 +260,9 @@ async def choose_teacher_mode(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(ApplicationForm.teacher_name, lambda c: c.data.startswith("teacher_"))
+@router.callback_query(ApplicationForm.teacher_name, lambda c: c.data.startswith("pick_teacher_"))
 async def choose_teacher_name(callback: CallbackQuery, state: FSMContext):
-    teacher_name = callback.data.split("_", 1)[1]
+    teacher_name = callback.data.split("pick_teacher_", 1)[1]
     await state.update_data(teacher_name=teacher_name)
 
     await callback.message.answer(

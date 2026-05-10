@@ -127,6 +127,7 @@ def get_teacher_card_keyboard(index: int, total: int):
         buttons.append(nav_buttons)
 
     buttons.append([InlineKeyboardButton(text="Оставить заявку", callback_data="teacher_signup")])
+    buttons.append([InlineKeyboardButton(text="← К предметам", callback_data="teacher_back_to_subjects")])
     buttons.append([InlineKeyboardButton(text="В меню", callback_data="back_to_menu")])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -225,7 +226,7 @@ def get_teachers_keyboard():
 
     for teacher in teachers:
         buttons.append(
-            [InlineKeyboardButton(text=teacher, callback_data=f"teacher_{teacher}")]
+            [InlineKeyboardButton(text=teacher, callback_data=f"pick_teacher_{teacher}")]
         )
 
     buttons.append(get_back_button())
