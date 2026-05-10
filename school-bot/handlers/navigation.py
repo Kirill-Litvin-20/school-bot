@@ -326,6 +326,17 @@ async def navigate_teacher_cards(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(ApplicationForm.teacher_card, lambda c: c.data == "teacher_back_to_subjects")
+async def teacher_back_to_subjects(callback: CallbackQuery, state: FSMContext):
+    subjects = get_teacher_catalog_subjects()
+    await callback.message.answer(
+        "Пожалуйста, выберите предмет:",
+        reply_markup=get_teacher_subject_keyboard(subjects),
+    )
+    await state.set_state(ApplicationForm.teacher_subject)
+    await callback.answer()
+
+
 @router.callback_query(ApplicationForm.teacher_card, lambda c: c.data == "teacher_signup")
 async def signup_from_teacher_card(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
