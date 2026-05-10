@@ -2435,6 +2435,13 @@ async def mark_student_attendance(callback: CallbackQuery):
 
     _, student_id, _, subject_name, lesson_balance_before, tariff_type, student_name, teacher_name = lesson
 
+    # Answer and remove keyboard immediately to prevent double-tap re-delivery.
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
     mark_attendance(direction_id, status, callback.from_user.id)
     log_admin_action(
         admin_telegram_id=callback.from_user.id,
@@ -2496,7 +2503,6 @@ async def mark_student_attendance(callback: CallbackQuery):
         parse_mode="HTML",
         reply_markup=get_admin_reply_menu(callback.from_user.id) if is_admin_role(callback.from_user.id) else get_teacher_menu()
     )
-    await callback.answer()
 
 
 @router.callback_query(lambda c: c.data == "admin_add_balance")
