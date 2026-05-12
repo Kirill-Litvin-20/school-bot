@@ -379,19 +379,18 @@ class SheetsClient:
         if gc is None:
             return False
         try:
+            from datetime import date as _date
             sp = gc.open_by_key(self._spreadsheet_id)
-            ws = self._get_or_add_worksheet(sp, _PAYOUTS_SHEET, cols=4)
-            self._clear_data_rows(ws, cols=4)
+            ws = self._get_or_add_worksheet(sp, _PAYOUTS_SHEET, cols=5)
+            self._clear_data_rows(ws, cols=5)
 
             rows_data: list[list] = []
-            # Track which row ranges are "current week" or "total" for formatting
-            format_ranges: list[dict] = []  # {type, start, end}
+            format_ranges: list[dict] = []
 
             for week_idx, week in enumerate(payouts):
                 w_start = week["week_start"]
                 w_end   = week["week_end"]
                 try:
-                    from datetime import date as _date
                     period_label = (
                         f"{_date.fromisoformat(w_start).strftime('%d.%m')}"
                         f" – {_date.fromisoformat(w_end).strftime('%d.%m.%y')}"
@@ -399,43 +398,90 @@ class SheetsClient:
                 except Exception:
                     period_label = f"{w_start} – {w_end}"
 
-                block_start = len(rows_data) + 2  # 1-based, +1 for header
+                total_amt = f"{week['total_lessons'] * self._lesson_rate:,}".replace(",", " ") + " ₽"
+                n_teachers = len(week["teachers"])
+                teacher_word = "препод" if n_teachers == 1 else "препода" if n_teachers in (2, 3, 4) else "преподов"
 
+                # ── Week block header row ──────────────────────────────────────
+                week_header_row = len(rows_data) + 2  # 1-based
+                rows_data.append([
+                    period_label,
+                    f"{n_teachers} {teacher_word}",
+                    week["total_lessons"],
+                    total_amt,
+                    "",
+                ])
+                format_ranges.append({
+                    "type": "week_header",
+                    "start": week_header_row,
+                    "end": week_header_row + 1,
+                    "current": week_idx == 0,
+                })
+
+                # ── Teacher rows ───────────────────────────────────────────────
+                teacher_start = len(rows_data) + 2  # 1-based
                 for t in week["teachers"]:
                     amt = f"{t['lessons'] * self._lesson_rate:,}".replace(",", " ") + " ₽"
-                    rows_data.append([period_label, t["name"], t["lessons"], amt, t.get("payment_details", "")])
+                    rows_data.append(["", t["name"], t["lessons"], amt, t.get("payment_details", "")])
+                teacher_end = len(rows_data) + 1  # 1-based (exclusive)
 
-                total_amt = f"{week['total_lessons'] * self._lesson_rate:,}".replace(",", " ") + " ₽"
-                rows_data.append(["", "ИТОГО", week["total_lessons"], total_amt, ""])
-                rows_data.append(["", "", "", "", ""])  # separator
+                if week_idx == 0 and week["teachers"]:
+                    format_ranges.append({"type": "current_teachers",
+                                          "start": teacher_start, "end": teacher_end})
 
-                block_end = len(rows_data) + 1  # 1-based
-                total_row = block_end - 1        # 1-based (the ИТОГО row, separator is last)
-
-                tag = "current" if week_idx == 0 else "archive"
-                format_ranges.append({"type": tag, "start": block_start, "end": block_end})
-                format_ranges.append({"type": "total", "start": total_row, "end": total_row + 1})
+                # ── Empty separator ────────────────────────────────────────────
+                rows_data.append(["", "", "", "", ""])
 
             if not rows_data:
                 rows_data.append(["Нет данных", "", "", "", ""])
 
-            # Write header + data
             ws.update("A1", [_PAYOUTS_HEADER] + rows_data, value_input_option="USER_ENTERED")
 
-            # Formatting
             sheet_id = ws.id
+            _C_HEADER_CURRENT = _C_PAYOUTS_HEADER                              # dark green
+            _C_HEADER_ARCHIVE = {"red": 0.42, "green": 0.45, "blue": 0.47}    # dark slate
+            _C_TEACHER_ROW    = {"red": 0.95, "green": 0.98, "blue": 0.95}    # very light green
+
             requests = [
                 self._header_format_request(sheet_id, 5, _C_PAYOUTS_HEADER),
                 self._freeze_request(sheet_id),
-            ] + self._col_widths_request(sheet_id, [160, 200, 90, 130, 200])
+            ] + self._col_widths_request(sheet_id, [145, 210, 80, 130, 210])
 
             for fr in format_ranges:
-                start_idx = fr["start"] - 1
-                end_idx   = fr["end"] - 1
-                if fr["type"] == "current":
-                    requests.append(self._row_format_request(sheet_id, start_idx, end_idx, _C_YELLOW_ROW, num_cols=5))
-                elif fr["type"] == "total":
-                    requests.append(self._row_format_request(sheet_id, start_idx, end_idx, _C_TOTAL_ROW, bold=True, num_cols=5))
+                s = fr["start"] - 1  # 0-based
+                e = fr["end"] - 1
+
+                if fr["type"] == "week_header":
+                    color = _C_HEADER_CURRENT if fr["current"] else _C_HEADER_ARCHIVE
+                    # Dark bg + white bold text
+                    requests.append({
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": s, "endRowIndex": e,
+                                "startColumnIndex": 0, "endColumnIndex": 5,
+                            },
+                            "cell": {"userEnteredFormat": {
+                                "backgroundColor": _rgb(color),
+                                "textFormat": {
+                                    "foregroundColor": _C_WHITE,
+                                    "bold": True,
+                                    "fontSize": 10,
+                                },
+                                "verticalAlignment": "MIDDLE",
+                            }},
+                            "fields": "userEnteredFormat(backgroundColor,textFormat,verticalAlignment)",
+                        }
+                    })
+                    # Row height for week headers
+                    requests.append({"updateDimensionProperties": {
+                        "range": {"sheetId": sheet_id, "dimension": "ROWS",
+                                  "startIndex": s, "endIndex": e},
+                        "properties": {"pixelSize": 28}, "fields": "pixelSize",
+                    }})
+
+                elif fr["type"] == "current_teachers":
+                    requests.append(self._row_format_request(sheet_id, s, e, _C_YELLOW_ROW, num_cols=5))
 
             self._batch_format(sp, requests)
             logger.info("Payouts sheet updated: %d weeks", len(payouts))
