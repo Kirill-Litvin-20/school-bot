@@ -4830,12 +4830,30 @@ def get_attendance_stats() -> dict:
 
     today = _date.today()
     today_str = today.isoformat()
-    week_start_str = (today - timedelta(days=today.weekday())).isoformat()
+
+    # Current week (Mon–Sun)
+    week_start = today - timedelta(days=today.weekday())
+    week_start_str = week_start.isoformat()
+
+    # Last complete week
+    last_week_end = week_start - timedelta(days=1)
+    last_week_start = last_week_end - timedelta(days=6)
+
+    # Current month
     month_start_str = today.replace(day=1).isoformat()
 
-    today_count = sum(1 for d in all_dates if d == today_str)
-    week_count = sum(1 for d in all_dates if d >= week_start_str)
-    month_count = sum(1 for d in all_dates if d >= month_start_str)
+    # Last calendar month
+    if today.month == 1:
+        last_month_start = today.replace(year=today.year - 1, month=12, day=1)
+    else:
+        last_month_start = today.replace(month=today.month - 1, day=1)
+    last_month_end = today.replace(day=1) - timedelta(days=1)
+
+    today_count      = sum(1 for d in all_dates if d == today_str)
+    week_count       = sum(1 for d in all_dates if d >= week_start_str)
+    last_week_count  = sum(1 for d in all_dates if last_week_start.isoformat() <= d <= last_week_end.isoformat())
+    month_count      = sum(1 for d in all_dates if d >= month_start_str)
+    last_month_count = sum(1 for d in all_dates if last_month_start.isoformat() <= d <= last_month_end.isoformat())
 
     weekday_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
     weekday_counts = [0] * 7
@@ -4845,11 +4863,44 @@ def get_attendance_stats() -> dict:
         except Exception:
             pass
 
+    # Last 8 complete Mon–Sun weeks
+    last_sunday = today - timedelta(days=(today.weekday() + 1) % 7)
+    last_monday = last_sunday - timedelta(days=6)
+    weekly_history = []
+    for i in range(8):
+        w_start = last_monday - timedelta(weeks=i)
+        w_end   = w_start + timedelta(days=6)
+        count = sum(1 for d in all_dates if w_start.isoformat() <= d <= w_end.isoformat())
+        weekly_history.append({
+            "label": f"{w_start.strftime('%d.%m')} – {w_end.strftime('%d.%m')}",
+            "count": count,
+        })
+
+    # Last 6 calendar months
+    _month_names = ["", "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+                    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"]
+    monthly_history = []
+    for i in range(6):
+        m = today.month - i
+        y = today.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        m_start = _date(y, m, 1)
+        m_end = (_date(y, m + 1, 1) if m < 12 else _date(y + 1, 1, 1)) - timedelta(days=1)
+        count = sum(1 for d in all_dates if m_start.isoformat() <= d <= m_end.isoformat())
+        suffix = f" {y}" if y != today.year else ""
+        monthly_history.append({"label": f"{_month_names[m]}{suffix}", "count": count})
+
     return {
-        "today": today_count,
-        "week": week_count,
-        "month": month_count,
-        "total": len(all_dates),
-        "by_weekday": list(zip(weekday_names, weekday_counts)),
-        "updated_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
+        "today":          today_count,
+        "week":           week_count,
+        "last_week":      last_week_count,
+        "month":          month_count,
+        "last_month":     last_month_count,
+        "total":          len(all_dates),
+        "by_weekday":     list(zip(weekday_names, weekday_counts)),
+        "weekly_history":  weekly_history,
+        "monthly_history": monthly_history,
+        "updated_at":     datetime.now().strftime("%d.%m.%Y %H:%M"),
     }
