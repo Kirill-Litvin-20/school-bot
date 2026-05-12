@@ -420,7 +420,7 @@ class SheetsClient:
                 # balance > 2 → green
                 self._cond_formula_request(sheet_id, "=$D2>2",              _C_GREEN_ROW,  index=0, num_cols=n),
                 # balance 1–2 → orange/yellow
-                self._cond_formula_request(sheet_id, "=AND($D2>=1,$D2<=2)", _C_ORANGE_ROW, index=1, num_cols=n),
+                self._cond_formula_request(sheet_id, "=($D2>=1)*($D2<=2)",  _C_ORANGE_ROW, index=1, num_cols=n),
                 # balance <= 0 → red
                 self._cond_formula_request(sheet_id, "=$D2<=0",             _C_RED_ROW,    index=2, num_cols=n),
             ] + self._col_widths_request(sheet_id, [190, 170, 190, 80, 140])
