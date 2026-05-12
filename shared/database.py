@@ -4614,6 +4614,68 @@ def optimize_database() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Backfill helpers
+# ---------------------------------------------------------------------------
+
+def get_all_attendance_for_backfill(from_date: str | None = None) -> list[dict]:
+    """Return all attendance records with full context for Sheets backfill.
+
+    Each dict contains: attendance_id, lesson_datetime, teacher_name,
+    student_name, subject_name, tariff_type, status, marked_by_name.
+    Ordered by lesson_date ASC so the sheet fills chronologically.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+
+    where = "WHERE a.lesson_date >= ?" if from_date else ""
+    params = (f"{from_date} 00:00:00",) if from_date else ()
+
+    cur.execute(
+        f"""
+        SELECT
+            a.id                                                         AS attendance_id,
+            a.lesson_date                                                AS lesson_datetime,
+            t.full_name                                                  AS teacher_name,
+            st.full_name                                                 AS student_name,
+            sl.subject_name,
+            sl.tariff_type,
+            a.status,
+            COALESCE(ktu.full_name, u.full_name, CAST(a.marked_by AS TEXT)) AS marked_by_name
+        FROM attendance a
+        JOIN student_lessons sl  ON a.student_lesson_id = sl.id
+        JOIN teachers t          ON sl.teacher_id       = t.id
+        JOIN students st         ON sl.student_id       = st.id
+        LEFT JOIN known_telegram_users ktu ON ktu.telegram_id = a.marked_by
+        LEFT JOIN users u                  ON u.telegram_id   = a.marked_by
+        {where}
+        ORDER BY a.lesson_date ASC
+        """,
+        params,
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    tariff_labels = {"package": "Пакет", "per_lesson": "Поурочно", "subscription": "Абонемент"}
+    status_labels = {"present": "Был", "absent": "Не был", "cancelled": "Отменено"}
+
+    return [
+        {
+            "attendance_id": r[0],
+            "lesson_datetime": r[1],
+            "teacher_name": r[2] or "—",
+            "student_name": r[3] or "—",
+            "subject_name": r[4] or "—",
+            "tariff_type": tariff_labels.get(r[5] or "", r[5] or "—"),
+            "status": status_labels.get(r[6] or "", r[6] or "—"),
+            "balance_before": "—",
+            "balance_after": "—",
+            "marked_by_name": r[7] or "—",
+        }
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Sheets outbox — гарантированная доставка строк в Google Sheets
 # ---------------------------------------------------------------------------
 
