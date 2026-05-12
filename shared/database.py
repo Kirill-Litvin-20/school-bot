@@ -1647,10 +1647,12 @@ def get_recent_attendance_for_student(student_id: int, limit: int = 5) -> list[d
     ]
 
 
-def mark_attendance(direction_id: int, status: str, marked_by: int):
+def mark_attendance(direction_id: int, status: str, marked_by: int) -> int:
+    """Insert an attendance record and return the new attendance row id."""
     conn = get_connection()
     cur = conn.cursor()
 
+    lesson_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cur.execute(
         """
         INSERT INTO attendance (student_lesson_id, lesson_date, status, written_off, marked_by)
@@ -1658,12 +1660,13 @@ def mark_attendance(direction_id: int, status: str, marked_by: int):
         """,
         (
             direction_id,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            lesson_datetime,
             status,
             1 if status == "present" else 0,
             marked_by
         )
     )
+    attendance_id = cur.lastrowid
 
     if status == "present":
         cur.execute(
@@ -1685,13 +1688,14 @@ def mark_attendance(direction_id: int, status: str, marked_by: int):
                 "attendance_writeoff",
                 -1,
                 "Списание за посещение",
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                lesson_datetime,
                 marked_by
             )
         )
 
     conn.commit()
     conn.close()
+    return attendance_id
 
 
 def add_lessons_to_balance(direction_id: int, lessons_count: int, created_by: int | None = None, comment: str | None = None):

@@ -2,6 +2,7 @@ from aiogram import Bot, F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
+import asyncio
 import logging
 import os
 import re
@@ -127,11 +128,50 @@ from shared.database import (
     get_referral_by_invitee_telegram_id,
     link_invitee_student,
 )
+from shared.sheets import get_sheets_client
 
 router = Router()
 router.message.filter(F.chat.type == "private")
 router.callback_query.filter(F.message.chat.type == "private")
 logger = logging.getLogger(__name__)
+
+
+async def _sync_attendance_to_sheets(
+    attendance_id: int,
+    lesson_datetime: str,
+    teacher_name: str,
+    student_name: str,
+    subject_name: str,
+    tariff_type: str,
+    status: str,
+    balance_before: int,
+    balance_after: int,
+    marked_by_name: str,
+) -> None:
+    """Fire-and-forget: push one attendance row to Google Sheets.
+
+    Runs in a thread so gspread's blocking HTTP calls don't stall the bot.
+    Errors are logged but never propagate — the DB write already succeeded.
+    """
+    client = get_sheets_client()
+    if not client.is_configured():
+        return
+    row = {
+        "attendance_id": attendance_id,
+        "lesson_datetime": lesson_datetime,
+        "teacher_name": teacher_name,
+        "student_name": student_name,
+        "subject_name": subject_name,
+        "tariff_type": tariff_type,
+        "status": status,
+        "balance_before": balance_before,
+        "balance_after": balance_after,
+        "marked_by_name": marked_by_name,
+    }
+    try:
+        await asyncio.to_thread(client.append_attendance, row)
+    except Exception as exc:
+        logger.error("Sheets sync error for attendance_id=%s: %s", attendance_id, exc)
 
 
 def build_payment_prompt_keyboard_clean() -> InlineKeyboardMarkup | None:
@@ -2442,7 +2482,8 @@ async def mark_student_attendance(callback: CallbackQuery):
     except Exception:
         pass
 
-    mark_attendance(direction_id, status, callback.from_user.id)
+    lesson_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    attendance_id = mark_attendance(direction_id, status, callback.from_user.id)
     log_admin_action(
         admin_telegram_id=callback.from_user.id,
         action_type="mark_attendance",
@@ -2454,6 +2495,20 @@ async def mark_student_attendance(callback: CallbackQuery):
 
     updated_lesson = get_student_lesson_by_id(direction_id)
     _, _, _, _, lesson_balance_after, _, _, _ = updated_lesson
+
+    marked_by_name = callback.from_user.full_name or str(callback.from_user.id)
+    asyncio.create_task(_sync_attendance_to_sheets(
+        attendance_id=attendance_id,
+        lesson_datetime=lesson_datetime,
+        teacher_name=teacher_name,
+        student_name=student_name,
+        subject_name=subject_name,
+        tariff_type=tariff_type,
+        status=status,
+        balance_before=lesson_balance_before,
+        balance_after=lesson_balance_after,
+        marked_by_name=marked_by_name,
+    ))
 
     student = get_student_by_id(student_id)
     student_telegram_id = student[2] if student else None
