@@ -4763,20 +4763,20 @@ def get_weekly_payouts(weeks: int = 8) -> list[dict]:
 
         cur.execute(
             """
-            SELECT t.full_name, COUNT(DISTINCT a.id) AS lessons
+            SELECT t.full_name, COUNT(DISTINCT a.id) AS lessons, t.payment_details
             FROM attendance a
             JOIN student_lessons sl ON a.student_lesson_id = sl.id
             JOIN teachers t ON sl.teacher_id = t.id
             WHERE a.lesson_date BETWEEN ? AND ?
               AND a.status IN ('present', 'completed')
-            GROUP BY t.id, t.full_name
+            GROUP BY t.id, t.full_name, t.payment_details
             ORDER BY t.full_name
             """,
             (start_dt, end_dt),
         )
         rows = cur.fetchall()
         if rows:
-            teachers = [{"name": r[0], "lessons": int(r[1])} for r in rows]
+            teachers = [{"name": r[0], "lessons": int(r[1]), "payment_details": r[2] or ""} for r in rows]
             result.append({
                 "week_start": w_start.isoformat(),
                 "week_end": w_end.isoformat(),
