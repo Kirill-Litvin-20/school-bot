@@ -133,11 +133,13 @@ def main() -> None:
     if args.reformat:
         print("  🎨 Применяю форматирование листа...", end="", flush=True)
         try:
-            gc = client._get_client()
-            spreadsheet = gc.open_by_key(client._spreadsheet_id)
-            ws = client._get_or_create_sheet(spreadsheet)
-            client.apply_formatting(ws, spreadsheet)
-            print(" готово.")
+            spreadsheet = client._open_spreadsheet()
+            if spreadsheet:
+                ws = client._get_or_add_worksheet(spreadsheet, "Журнал")
+                client._format_journal(ws, spreadsheet)
+                print(" готово.")
+            else:
+                print("\n  ⚠️  Не удалось открыть таблицу.")
         except Exception as exc:
             print(f"\n  ⚠️  Не удалось применить форматирование: {exc}")
         print()
@@ -172,7 +174,7 @@ def main() -> None:
         print(f"║  ⏭   Уже были в таблице : {skipped_total:<28}║")
     print("╚══════════════════════════════════════════════════════╝")
     print()
-    print("  Открой таблицу и проверь лист «Посещения».")
+    print("  Открой таблицу и проверь лист «Журнал».")
     print()
 
 
