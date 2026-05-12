@@ -498,6 +498,19 @@ def init_db():
         """
     )
 
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sheets_outbox (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            attendance_id INTEGER NOT NULL UNIQUE,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT
+        )
+        """
+    )
+
     _ensure_postgres_bigint_columns(cur)
     _cleanup_teacher_profiles_for_non_teacher_users(cur)
     conn.commit()
@@ -1647,10 +1660,12 @@ def get_recent_attendance_for_student(student_id: int, limit: int = 5) -> list[d
     ]
 
 
-def mark_attendance(direction_id: int, status: str, marked_by: int):
+def mark_attendance(direction_id: int, status: str, marked_by: int) -> int:
+    """Insert an attendance record and return the new attendance row id."""
     conn = get_connection()
     cur = conn.cursor()
 
+    lesson_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cur.execute(
         """
         INSERT INTO attendance (student_lesson_id, lesson_date, status, written_off, marked_by)
@@ -1658,12 +1673,13 @@ def mark_attendance(direction_id: int, status: str, marked_by: int):
         """,
         (
             direction_id,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            lesson_datetime,
             status,
             1 if status == "present" else 0,
             marked_by
         )
     )
+    attendance_id = cur.lastrowid
 
     if status == "present":
         cur.execute(
@@ -1685,13 +1701,14 @@ def mark_attendance(direction_id: int, status: str, marked_by: int):
                 "attendance_writeoff",
                 -1,
                 "Списание за посещение",
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                lesson_datetime,
                 marked_by
             )
         )
 
     conn.commit()
     conn.close()
+    return attendance_id
 
 
 def add_lessons_to_balance(direction_id: int, lessons_count: int, created_by: int | None = None, comment: str | None = None):
@@ -3450,6 +3467,86 @@ def get_teacher_weekly_lessons_report(start_date: str = None, end_date: str = No
     return rows
 
 
+def get_teachers_with_lessons() -> list[tuple[int, str]]:
+    """Return [(teacher_id, full_name)] for teachers who have any attendance records."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT t.id, t.full_name
+        FROM teachers t
+        JOIN student_lessons sl ON sl.teacher_id = t.id
+        JOIN attendance a ON a.student_lesson_id = sl.id
+        ORDER BY t.full_name
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [(r[0], r[1]) for r in rows]
+
+
+def get_teacher_lessons_report(
+    teacher_id: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list:
+    """Like get_teacher_weekly_lessons_report but with optional teacher_id filter.
+
+    Returns list of (teacher_id, teacher_name, subject_name, lessons_count, last_lesson_date).
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+
+    if start_date is None:
+        start_dt = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        start_dt = f"{start_date} 00:00:00"
+    if end_date is None:
+        end_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        end_dt = f"{end_date} 23:59:59"
+
+    if teacher_id is not None:
+        cur.execute(
+            """
+            SELECT t.id, t.full_name, sl.subject_name,
+                   COUNT(DISTINCT a.id) AS lessons_count,
+                   MAX(a.lesson_date) AS last_lesson_date,
+                   st.full_name AS student_name
+            FROM attendance a
+            JOIN student_lessons sl ON a.student_lesson_id = sl.id
+            JOIN teachers t ON sl.teacher_id = t.id
+            JOIN students st ON sl.student_id = st.id
+            WHERE a.lesson_date BETWEEN ? AND ?
+              AND a.status IN ('present', 'completed')
+              AND t.id = ?
+            GROUP BY t.id, sl.subject_name, st.id
+            ORDER BY sl.subject_name, st.full_name
+            """,
+            (start_dt, end_dt, teacher_id),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT t.id, t.full_name, sl.subject_name,
+                   COUNT(DISTINCT a.id) AS lessons_count,
+                   MAX(a.lesson_date) AS last_lesson_date,
+                   NULL AS student_name
+            FROM attendance a
+            JOIN student_lessons sl ON a.student_lesson_id = sl.id
+            JOIN teachers t ON sl.teacher_id = t.id
+            WHERE a.lesson_date BETWEEN ? AND ?
+              AND a.status IN ('present', 'completed')
+            GROUP BY t.id, sl.subject_name
+            ORDER BY t.full_name, sl.subject_name
+            """,
+            (start_dt, end_dt),
+        )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
 def format_teacher_weekly_report(rows: list, period_desc: str = "за неделю") -> str:
     """Форматирует отчет о занятиях учителей в красивый вид."""
     if not rows:
@@ -4514,3 +4611,125 @@ def optimize_database() -> dict:
         "indexes_created": created,
         "vacuumed": True,
     }
+
+
+# ---------------------------------------------------------------------------
+# Backfill helpers
+# ---------------------------------------------------------------------------
+
+def get_all_attendance_for_backfill(from_date: str | None = None) -> list[dict]:
+    """Return all attendance records with full context for Sheets backfill.
+
+    Each dict contains: attendance_id, lesson_datetime, teacher_name,
+    student_name, subject_name, tariff_type, status, marked_by_name.
+    Ordered by lesson_date ASC so the sheet fills chronologically.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+
+    where = "WHERE a.lesson_date >= ?" if from_date else ""
+    params = (f"{from_date} 00:00:00",) if from_date else ()
+
+    cur.execute(
+        f"""
+        SELECT
+            a.id                                                         AS attendance_id,
+            a.lesson_date                                                AS lesson_datetime,
+            t.full_name                                                  AS teacher_name,
+            st.full_name                                                 AS student_name,
+            sl.subject_name,
+            sl.tariff_type,
+            a.status,
+            COALESCE(ktu.full_name, u.full_name, CAST(a.marked_by AS TEXT)) AS marked_by_name
+        FROM attendance a
+        JOIN student_lessons sl  ON a.student_lesson_id = sl.id
+        JOIN teachers t          ON sl.teacher_id       = t.id
+        JOIN students st         ON sl.student_id       = st.id
+        LEFT JOIN known_telegram_users ktu ON ktu.telegram_id = a.marked_by
+        LEFT JOIN users u                  ON u.telegram_id   = a.marked_by
+        {where}
+        ORDER BY a.lesson_date ASC
+        """,
+        params,
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    tariff_labels = {"package": "Пакет", "per_lesson": "Поурочно", "subscription": "Абонемент"}
+    status_labels = {"present": "Был", "absent": "Не был", "cancelled": "Отменено"}
+
+    return [
+        {
+            "attendance_id": r[0],
+            "lesson_datetime": r[1],
+            "teacher_name": r[2] or "—",
+            "student_name": r[3] or "—",
+            "subject_name": r[4] or "—",
+            "tariff_type": tariff_labels.get(r[5] or "", r[5] or "—"),
+            "status": status_labels.get(r[6] or "", r[6] or "—"),
+            "balance_before": "—",
+            "balance_after": "—",
+            "marked_by_name": r[7] or "—",
+        }
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Sheets outbox — гарантированная доставка строк в Google Sheets
+# ---------------------------------------------------------------------------
+
+def sheets_outbox_add(attendance_id: int, payload: dict) -> None:
+    """Сохранить строку в очередь на случай, если Sheets недоступен."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT OR IGNORE INTO sheets_outbox (attendance_id, payload_json, created_at)
+        VALUES (?, ?, ?)
+        """,
+        (attendance_id, json.dumps(payload, ensure_ascii=False), datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+    )
+    conn.commit()
+    conn.close()
+
+
+def sheets_outbox_pop_pending(limit: int = 20) -> list[dict]:
+    """Вернуть до `limit` записей с attempts < 10, не трогая их пока."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, attendance_id, payload_json, attempts
+        FROM sheets_outbox
+        WHERE attempts < 10
+        ORDER BY id
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {"outbox_id": r[0], "attendance_id": r[1], "payload": json.loads(r[2]), "attempts": r[3]}
+        for r in rows
+    ]
+
+
+def sheets_outbox_delete(outbox_id: int) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM sheets_outbox WHERE id = ?", (outbox_id,))
+    conn.commit()
+    conn.close()
+
+
+def sheets_outbox_increment_attempts(outbox_id: int, error: str) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE sheets_outbox SET attempts = attempts + 1, last_error = ? WHERE id = ?",
+        (error[:500], outbox_id),
+    )
+    conn.commit()
+    conn.close()

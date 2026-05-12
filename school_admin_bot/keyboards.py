@@ -360,4 +360,41 @@ def get_student_disambiguation_keyboard(
             [InlineKeyboardButton(text=text[:64], callback_data=f"{action_prefix}_{student_id}")]
         )
     buttons.append([InlineKeyboardButton(text="Главное меню", callback_data="menu_home")])
+
+
+def get_lessons_report_period_keyboard(back_callback: str = "superadmin_section_reports"):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Сегодня", callback_data="lreport_period_today"),
+                InlineKeyboardButton(text="7 дней", callback_data="lreport_period_week"),
+            ],
+            [
+                InlineKeyboardButton(text="30 дней", callback_data="lreport_period_month"),
+                InlineKeyboardButton(text="Этот месяц", callback_data="lreport_period_curmonth"),
+            ],
+            [InlineKeyboardButton(text="Произвольный период", callback_data="lreport_period_custom")],
+            [InlineKeyboardButton(text="← Назад", callback_data=back_callback)],
+        ]
+    )
+
+
+def get_lessons_report_teacher_filter_keyboard(
+    teachers: list[tuple[int, str]],
+    period_key: str,
+    back_callback: str = "admin_teacher_lessons_report",
+):
+    """teachers: list of (teacher_id, full_name)."""
+    buttons = [
+        [InlineKeyboardButton(text="Все преподаватели", callback_data=f"lreport_teacher_all_{period_key}")]
+    ]
+    for teacher_id, full_name in teachers[:20]:
+        buttons.append(
+            [InlineKeyboardButton(
+                text=full_name[:60],
+                callback_data=f"lreport_teacher_{teacher_id}_{period_key}",
+            )]
+        )
+    buttons.append([InlineKeyboardButton(text="← Назад", callback_data=back_callback)])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
     return InlineKeyboardMarkup(inline_keyboard=buttons)

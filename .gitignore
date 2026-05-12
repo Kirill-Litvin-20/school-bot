@@ -23,3 +23,5 @@ venv/
 _local_git_backups/
 Thumbs.db
 Desktop.ini
+*service_account*.json
+*google*key*.json

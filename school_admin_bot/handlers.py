@@ -2,6 +2,7 @@ from aiogram import Bot, F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
+import asyncio
 import logging
 import os
 import re
@@ -65,6 +66,8 @@ from keyboards import (
     get_edit_teacher_subject_picker_keyboard,
     get_publication_audience_keyboard,
     get_publication_schedule_keyboard,
+    get_lessons_report_period_keyboard,
+    get_lessons_report_teacher_filter_keyboard,
 )
 from states import AdminStates
 from shared.database import (
@@ -92,6 +95,8 @@ from shared.database import (
     format_admin_action_log,
     get_teacher_weekly_lessons_report,
     get_weekly_lessons_report_for_teacher_telegram,
+    get_teacher_lessons_report,
+    get_teachers_with_lessons,
     format_teacher_weekly_report,
     get_recent_payment_history_by_telegram_user,
     build_daily_debt_report,
@@ -127,11 +132,55 @@ from shared.database import (
     get_referral_by_invitee_telegram_id,
     link_invitee_student,
 )
+from shared.sheets import get_sheets_client
+from shared.database import sheets_outbox_add
 
 router = Router()
 router.message.filter(F.chat.type == "private")
 router.callback_query.filter(F.message.chat.type == "private")
 logger = logging.getLogger(__name__)
+
+
+async def _sync_attendance_to_sheets(
+    attendance_id: int,
+    lesson_datetime: str,
+    teacher_name: str,
+    student_name: str,
+    subject_name: str,
+    tariff_type: str,
+    status: str,
+    balance_before: int,
+    balance_after: int,
+    marked_by_name: str,
+) -> None:
+    """Fire-and-forget: push one attendance row to Google Sheets.
+
+    On failure the row is saved to sheets_outbox and retried by
+    _flush_sheets_outbox. The DB write always succeeds regardless.
+    """
+    client = get_sheets_client()
+    if not client.is_configured():
+        return
+    row = {
+        "attendance_id": attendance_id,
+        "lesson_datetime": lesson_datetime,
+        "teacher_name": teacher_name,
+        "student_name": student_name,
+        "subject_name": subject_name,
+        "tariff_type": tariff_type,
+        "status": status,
+        "balance_before": balance_before,
+        "balance_after": balance_after,
+        "marked_by_name": marked_by_name,
+    }
+    try:
+        ok = await asyncio.to_thread(client.append_attendance, row)
+        if not ok:
+            raise RuntimeError("append_attendance returned False")
+    except Exception as exc:
+        logger.warning("Sheets sync failed, queuing for retry (attendance_id=%s): %s", attendance_id, exc)
+        await asyncio.to_thread(sheets_outbox_add, attendance_id, row)
+
 
 
 def build_payment_prompt_keyboard_clean() -> InlineKeyboardMarkup | None:
@@ -2442,7 +2491,8 @@ async def mark_student_attendance(callback: CallbackQuery):
     except Exception:
         pass
 
-    mark_attendance(direction_id, status, callback.from_user.id)
+    lesson_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    attendance_id = mark_attendance(direction_id, status, callback.from_user.id)
     log_admin_action(
         admin_telegram_id=callback.from_user.id,
         action_type="mark_attendance",
@@ -2454,6 +2504,20 @@ async def mark_student_attendance(callback: CallbackQuery):
 
     updated_lesson = get_student_lesson_by_id(direction_id)
     _, _, _, _, lesson_balance_after, _, _, _ = updated_lesson
+
+    marked_by_name = callback.from_user.full_name or str(callback.from_user.id)
+    asyncio.create_task(_sync_attendance_to_sheets(
+        attendance_id=attendance_id,
+        lesson_datetime=lesson_datetime,
+        teacher_name=teacher_name,
+        student_name=student_name,
+        subject_name=subject_name,
+        tariff_type=tariff_type,
+        status=status,
+        balance_before=lesson_balance_before,
+        balance_after=lesson_balance_after,
+        marked_by_name=marked_by_name,
+    ))
 
     student = get_student_by_id(student_id)
     student_telegram_id = student[2] if student else None
@@ -2744,27 +2808,234 @@ async def admin_teacher_lessons_report(callback: CallbackQuery):
     if not is_admin_role(callback.from_user.id):
         await callback.answer("Нет доступа", show_alert=True)
         return
+    await callback.message.answer(
+        "📊 <b>Отчёт по занятиям преподавателей</b>\n\nВыберите период:",
+        parse_mode="HTML",
+        reply_markup=get_lessons_report_period_keyboard(back_callback="superadmin_section_reports"),
+    )
+    await callback.answer()
 
-    rows = get_teacher_weekly_lessons_report()
-    text = format_teacher_weekly_report(rows, "за последние 7 дней")
 
-    chunks = []
-    current = ""
-    for line in text.split("\n"):
-        if len(current) + len(line) + 1 > 3500:
-            if current:
-                chunks.append(current)
-            current = line
+def _period_dates(period_key: str) -> tuple[str, str, str]:
+    """Return (start_date, end_date, label) for a period key."""
+    today = datetime.now().date()
+    if period_key == "today":
+        return today.isoformat(), today.isoformat(), "сегодня"
+    if period_key == "week":
+        return (today - timedelta(days=7)).isoformat(), today.isoformat(), "за 7 дней"
+    if period_key == "month":
+        return (today - timedelta(days=30)).isoformat(), today.isoformat(), "за 30 дней"
+    if period_key == "curmonth":
+        start = today.replace(day=1)
+        return start.isoformat(), today.isoformat(), f"за {today.strftime('%B %Y')}"
+    return (today - timedelta(days=7)).isoformat(), today.isoformat(), "за 7 дней"
+
+
+def _format_report_text(rows: list, period_label: str, teacher_id: int | None) -> str:
+    if not rows:
+        return f"📊 За выбранный период ({period_label}) проведённых занятий не найдено."
+
+    lines = [f"📊 <b>Отчёт по занятиям {period_label}</b>\n"]
+    current_teacher = None
+    total_all = 0
+
+    for row in rows:
+        tid, tname, subject, count, last_date = row[0], row[1], row[2], int(row[3] or 0), row[4]
+        student_name = row[5] if len(row) > 5 else None
+        total_all += count
+        last_view = (last_date or "—")[:10] if last_date else "—"
+
+        if current_teacher != tname:
+            if current_teacher is not None:
+                lines.append("")
+            current_teacher = tname
+            if teacher_id is None:
+                lines.append(f"<b>👨‍🏫 {tname}</b>")
+
+        if student_name:
+            lines.append(f"  • {subject} — {student_name}: <b>{count}</b> зан. (посл.: {last_view})")
         else:
-            current += ("\n" if current else "") + line
+            lines.append(f"  • {subject}: <b>{count}</b> зан. (посл.: {last_view})")
 
-    if current:
-        chunks.append(current)
+    lines.append(f"\n<b>Итого занятий: {total_all}</b>")
+    return "\n".join(lines)
 
-    for chunk in chunks:
-        await callback.message.answer(chunk, parse_mode="HTML")
+
+def _make_excel(rows: list, period_label: str) -> bytes:
+    from io import BytesIO
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Занятия"
+
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True)
+    headers = ["Преподаватель", "Предмет", "Ученик", "Занятий", "Последнее занятие"]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+
+    for r_idx, row in enumerate(rows, 2):
+        tid, tname, subject, count, last_date = row[0], row[1], row[2], int(row[3] or 0), row[4]
+        student_name = row[5] if len(row) > 5 else "—"
+        last_view = (last_date or "")[:10] if last_date else "—"
+        ws.append([tname, subject, student_name or "—", count, last_view])
+
+    for col in ws.columns:
+        max_len = max((len(str(c.value or "")) for c in col), default=10)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 40)
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+@router.callback_query(lambda c: c.data.startswith("lreport_period_") and c.data != "lreport_period_custom")
+async def lreport_choose_period(callback: CallbackQuery):
+    if not is_admin_role(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    period_key = callback.data.removeprefix("lreport_period_")
+    teachers = get_teachers_with_lessons()
+    if not teachers:
+        await callback.message.answer("Нет данных о занятиях.", parse_mode="HTML")
+        await callback.answer()
+        return
+    await callback.message.answer(
+        "Выберите преподавателя:",
+        reply_markup=get_lessons_report_teacher_filter_keyboard(
+            teachers, period_key, back_callback="admin_teacher_lessons_report"
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "lreport_period_custom")
+async def lreport_period_custom(callback: CallbackQuery, state: FSMContext):
+    if not is_admin_role(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.message.answer(
+        "Введите <b>дату начала</b> периода в формате ДД.ММ.ГГГГ или ГГГГ-ММ-ДД:",
+        parse_mode="HTML",
+    )
+    await state.set_state(AdminStates.waiting_report_start_date)
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_report_start_date)
+async def lreport_get_start_date(message: Message, state: FSMContext):
+    raw = message.text.strip()
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            d = datetime.strptime(raw, fmt).date()
+            await state.update_data(report_start=d.isoformat())
+            await message.answer(
+                f"Начало: <b>{d.strftime('%d.%m.%Y')}</b>\n\nТеперь введите <b>дату конца</b> периода:",
+                parse_mode="HTML",
+            )
+            await state.set_state(AdminStates.waiting_report_end_date)
+            return
+        except ValueError:
+            pass
+    await message.answer("Неверный формат. Попробуй ДД.ММ.ГГГГ, например: 01.05.2025")
+
+
+@router.message(AdminStates.waiting_report_end_date)
+async def lreport_get_end_date(message: Message, state: FSMContext):
+    raw = message.text.strip()
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            d = datetime.strptime(raw, fmt).date()
+            data = await state.get_data()
+            await state.clear()
+            start = data.get("report_start", d.isoformat())
+            teachers = get_teachers_with_lessons()
+            period_key = f"custom_{start}_{d.isoformat()}"
+            await message.answer(
+                f"Период: <b>{start} — {d.isoformat()}</b>\nВыберите преподавателя:",
+                parse_mode="HTML",
+                reply_markup=get_lessons_report_teacher_filter_keyboard(
+                    teachers, period_key, back_callback="admin_teacher_lessons_report"
+                ),
+            )
+            return
+        except ValueError:
+            pass
+    await message.answer("Неверный формат. Попробуй ДД.ММ.ГГГГ, например: 31.05.2025")
+
+
+@router.callback_query(lambda c: c.data.startswith("lreport_teacher_"))
+async def lreport_show_report(callback: CallbackQuery):
+    if not is_admin_role(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    # parse callback: lreport_teacher_{all|ID}_{period_key}
+    parts = callback.data.removeprefix("lreport_teacher_").split("_", 1)
+    teacher_raw, period_key = parts[0], parts[1] if len(parts) > 1 else "week"
+    teacher_id = None if teacher_raw == "all" else int(teacher_raw)
+
+    if period_key.startswith("custom_"):
+        _, start_date, end_date = period_key.split("_", 2)
+        period_label = f"с {start_date} по {end_date}"
+    else:
+        start_date, end_date, period_label = _period_dates(period_key)
+
+    rows = get_teacher_lessons_report(teacher_id=teacher_id, start_date=start_date, end_date=end_date)
+    text = _format_report_text(rows, period_label, teacher_id)
+
+    export_callback = f"lreport_excel_{teacher_raw}_{period_key}"
+    export_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📥 Скачать Excel", callback_data=export_callback)],
+        [InlineKeyboardButton(text="← Назад", callback_data="admin_teacher_lessons_report")],
+    ])
+
+    chunks = [text[i:i+3500] for i in range(0, len(text), 3500)]
+    for i, chunk in enumerate(chunks):
+        kb = export_kb if i == len(chunks) - 1 else None
+        await callback.message.answer(chunk, parse_mode="HTML", reply_markup=kb)
 
     await callback.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("lreport_excel_"))
+async def lreport_export_excel(callback: CallbackQuery):
+    if not is_admin_role(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    parts = callback.data.removeprefix("lreport_excel_").split("_", 1)
+    teacher_raw, period_key = parts[0], parts[1] if len(parts) > 1 else "week"
+    teacher_id = None if teacher_raw == "all" else int(teacher_raw)
+
+    if period_key.startswith("custom_"):
+        _, start_date, end_date = period_key.split("_", 2)
+        period_label = f"{start_date}_{end_date}"
+    else:
+        start_date, end_date, period_label = _period_dates(period_key)
+
+    rows = get_teacher_lessons_report(teacher_id=teacher_id, start_date=start_date, end_date=end_date)
+    if not rows:
+        await callback.answer("Нет данных для выгрузки.", show_alert=True)
+        return
+
+    await callback.answer("Формирую файл...")
+    try:
+        xlsx_bytes = await asyncio.to_thread(_make_excel, rows, period_label)
+        from aiogram.types import BufferedInputFile
+        filename = f"lessons_{period_label.replace(' ', '_')}.xlsx"
+        await callback.message.answer_document(
+            BufferedInputFile(xlsx_bytes, filename=filename),
+            caption=f"📊 Отчёт по занятиям {period_label}",
+        )
+    except Exception as exc:
+        logger.error("Excel export error: %s", exc)
+        await callback.message.answer("Ошибка при формировании Excel.")
 
 
 @router.message(AdminStates.waiting_history_student_search)

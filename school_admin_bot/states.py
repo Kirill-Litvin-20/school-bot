@@ -51,3 +51,6 @@ class AdminStates(StatesGroup):
     waiting_review_description = State()
     waiting_review_media = State()
     waiting_review_links = State()
+
+    waiting_report_start_date = State()
+    waiting_report_end_date = State()
