@@ -4798,7 +4798,6 @@ def get_all_student_balances() -> list[dict]:
         FROM student_lessons sl
         JOIN students st ON sl.student_id = st.id
         JOIN teachers t ON sl.teacher_id = t.id
-        WHERE st.is_active = 1
         ORDER BY sl.lesson_balance ASC, st.full_name
         """
     )
