@@ -410,7 +410,7 @@ class SheetsClient:
                 rows_data.append(["", "", "", ""])  # separator
 
                 block_end = len(rows_data) + 1  # 1-based
-                total_row = block_end - 2        # 1-based (the ИТОГО row)
+                total_row = block_end - 1        # 1-based (the ИТОГО row, separator is last)
 
                 tag = "current" if week_idx == 0 else "archive"
                 format_ranges.append({"type": tag, "start": block_start, "end": block_end})
