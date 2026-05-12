@@ -233,6 +233,12 @@ class SheetsClient:
         # A=Дата B=Время C=День D=Препод E=Ученик F=Направление G=Тариф H=Статус I=Бал.до J=Бал.после K=Кто L=ID
         col_widths = [90, 60, 40, 150, 150, 150, 85, 85, 80, 80, 140, 70]
         requests = [
+            # Ensure sheet has enough columns before setting widths
+            {"updateSheetProperties": {
+                "properties": {"sheetId": sheet_id,
+                               "gridProperties": {"columnCount": n}},
+                "fields": "gridProperties.columnCount",
+            }},
             self._header_format_request(sheet_id, n, _C_JOURNAL_HEADER),
             self._freeze_request(sheet_id),
             {"updateDimensionProperties": {
