@@ -498,6 +498,19 @@ def init_db():
         """
     )
 
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sheets_outbox (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            attendance_id INTEGER NOT NULL UNIQUE,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT
+        )
+        """
+    )
+
     _ensure_postgres_bigint_columns(cur)
     _cleanup_teacher_profiles_for_non_teacher_users(cur)
     conn.commit()
@@ -3454,6 +3467,86 @@ def get_teacher_weekly_lessons_report(start_date: str = None, end_date: str = No
     return rows
 
 
+def get_teachers_with_lessons() -> list[tuple[int, str]]:
+    """Return [(teacher_id, full_name)] for teachers who have any attendance records."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT t.id, t.full_name
+        FROM teachers t
+        JOIN student_lessons sl ON sl.teacher_id = t.id
+        JOIN attendance a ON a.student_lesson_id = sl.id
+        ORDER BY t.full_name
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [(r[0], r[1]) for r in rows]
+
+
+def get_teacher_lessons_report(
+    teacher_id: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list:
+    """Like get_teacher_weekly_lessons_report but with optional teacher_id filter.
+
+    Returns list of (teacher_id, teacher_name, subject_name, lessons_count, last_lesson_date).
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+
+    if start_date is None:
+        start_dt = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        start_dt = f"{start_date} 00:00:00"
+    if end_date is None:
+        end_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        end_dt = f"{end_date} 23:59:59"
+
+    if teacher_id is not None:
+        cur.execute(
+            """
+            SELECT t.id, t.full_name, sl.subject_name,
+                   COUNT(DISTINCT a.id) AS lessons_count,
+                   MAX(a.lesson_date) AS last_lesson_date,
+                   st.full_name AS student_name
+            FROM attendance a
+            JOIN student_lessons sl ON a.student_lesson_id = sl.id
+            JOIN teachers t ON sl.teacher_id = t.id
+            JOIN students st ON sl.student_id = st.id
+            WHERE a.lesson_date BETWEEN ? AND ?
+              AND a.status IN ('present', 'completed')
+              AND t.id = ?
+            GROUP BY t.id, sl.subject_name, st.id
+            ORDER BY sl.subject_name, st.full_name
+            """,
+            (start_dt, end_dt, teacher_id),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT t.id, t.full_name, sl.subject_name,
+                   COUNT(DISTINCT a.id) AS lessons_count,
+                   MAX(a.lesson_date) AS last_lesson_date,
+                   NULL AS student_name
+            FROM attendance a
+            JOIN student_lessons sl ON a.student_lesson_id = sl.id
+            JOIN teachers t ON sl.teacher_id = t.id
+            WHERE a.lesson_date BETWEEN ? AND ?
+              AND a.status IN ('present', 'completed')
+            GROUP BY t.id, sl.subject_name
+            ORDER BY t.full_name, sl.subject_name
+            """,
+            (start_dt, end_dt),
+        )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
 def format_teacher_weekly_report(rows: list, period_desc: str = "за неделю") -> str:
     """Форматирует отчет о занятиях учителей в красивый вид."""
     if not rows:
@@ -4518,3 +4611,63 @@ def optimize_database() -> dict:
         "indexes_created": created,
         "vacuumed": True,
     }
+
+
+# ---------------------------------------------------------------------------
+# Sheets outbox — гарантированная доставка строк в Google Sheets
+# ---------------------------------------------------------------------------
+
+def sheets_outbox_add(attendance_id: int, payload: dict) -> None:
+    """Сохранить строку в очередь на случай, если Sheets недоступен."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT OR IGNORE INTO sheets_outbox (attendance_id, payload_json, created_at)
+        VALUES (?, ?, ?)
+        """,
+        (attendance_id, json.dumps(payload, ensure_ascii=False), datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+    )
+    conn.commit()
+    conn.close()
+
+
+def sheets_outbox_pop_pending(limit: int = 20) -> list[dict]:
+    """Вернуть до `limit` записей с attempts < 10, не трогая их пока."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, attendance_id, payload_json, attempts
+        FROM sheets_outbox
+        WHERE attempts < 10
+        ORDER BY id
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {"outbox_id": r[0], "attendance_id": r[1], "payload": json.loads(r[2]), "attempts": r[3]}
+        for r in rows
+    ]
+
+
+def sheets_outbox_delete(outbox_id: int) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM sheets_outbox WHERE id = ?", (outbox_id,))
+    conn.commit()
+    conn.close()
+
+
+def sheets_outbox_increment_attempts(outbox_id: int, error: str) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE sheets_outbox SET attempts = attempts + 1, last_error = ? WHERE id = ?",
+        (error[:500], outbox_id),
+    )
+    conn.commit()
+    conn.close()

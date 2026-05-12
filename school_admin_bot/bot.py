@@ -30,7 +30,11 @@ from shared.database import (
     mark_publication_post_sent,
     mark_daily_debt_report_sent,
     run_startup_maintenance_from_env,
+    sheets_outbox_pop_pending,
+    sheets_outbox_delete,
+    sheets_outbox_increment_attempts,
 )
+from shared.sheets import get_sheets_client
 from shared.health import start_health_server
 from shared.logging_setup import get_log_settings, setup_logging
 
@@ -288,6 +292,37 @@ async def publication_worker():
             await publish_bot.session.close()
 
 
+async def sheets_outbox_worker():
+    """Retry attendance rows that failed to reach Google Sheets."""
+    logger = logging.getLogger(__name__)
+    client = get_sheets_client()
+    while True:
+        try:
+            if client.is_configured():
+                pending = await asyncio.to_thread(sheets_outbox_pop_pending)
+                for item in pending:
+                    try:
+                        ok = await asyncio.to_thread(client.append_attendance, item["payload"])
+                        if ok:
+                            await asyncio.to_thread(sheets_outbox_delete, item["outbox_id"])
+                            logger.info("Sheets outbox: flushed attendance_id=%s", item["attendance_id"])
+                        else:
+                            await asyncio.to_thread(
+                                sheets_outbox_increment_attempts, item["outbox_id"], "returned False"
+                            )
+                    except Exception as exc:
+                        await asyncio.to_thread(
+                            sheets_outbox_increment_attempts, item["outbox_id"], str(exc)
+                        )
+                        logger.warning(
+                            "Sheets outbox retry failed for attendance_id=%s: %s",
+                            item["attendance_id"], exc,
+                        )
+        except Exception as exc:
+            logger.exception("Sheets outbox worker error: %s", exc)
+        await asyncio.sleep(60)
+
+
 async def cleanup_worker():
     """Периодически оптимизирует БД: удаляет старые данные и запускает VACUUM."""
     from shared.database import cleanup_old_data, optimize_database
@@ -351,6 +386,7 @@ async def main():
     report_task = asyncio.create_task(debt_report_worker())
     publication_task = asyncio.create_task(publication_worker())
     cleanup_task = asyncio.create_task(cleanup_worker())
+    sheets_task = asyncio.create_task(sheets_outbox_worker())
     try:
         while True:
             try:
@@ -366,12 +402,15 @@ async def main():
         report_task.cancel()
         publication_task.cancel()
         cleanup_task.cancel()
+        sheets_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await report_task
         with contextlib.suppress(asyncio.CancelledError):
             await publication_task
         with contextlib.suppress(asyncio.CancelledError):
             await cleanup_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await sheets_task
         if health_runner is not None:
             await health_runner.cleanup()
 
