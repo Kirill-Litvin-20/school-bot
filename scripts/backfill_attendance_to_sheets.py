@@ -146,23 +146,31 @@ def main() -> None:
 
     # ── 4. Пишем в Sheets ─────────────────────────────────────────────────────
     print("  📤 Записываю в Google Sheets...")
+    if args.reformat:
+        print("  ℹ️  Режим --reformat: очищаю лист и перезаписываю все данные (новые сверху).")
     print()
 
-    # Пишем батчами по 200 и показываем прогресс
-    batch_size = 200
-    total = len(rows)
-    added_total = 0
-    skipped_total = 0
+    if args.reformat:
+        # Single full rebuild pass with progress
+        _print_progress(0, len(rows), "очищаю и перезаписываю...")
+        added_total, skipped_total = client.batch_append_rows(rows, rebuild=True)
+        _print_progress(len(rows), len(rows), "готово")
+    else:
+        # Incremental batches with progress
+        batch_size = 200
+        total = len(rows)
+        added_total = 0
+        skipped_total = 0
 
-    for start in range(0, total, batch_size):
-        chunk = rows[start:start + batch_size]
-        label = f"{chunk[0]['lesson_datetime'][:10]}" if chunk else ""
-        _print_progress(start, total, label)
-        added, skipped = client.batch_append_rows(chunk)
-        added_total += added
-        skipped_total += skipped
+        for start in range(0, total, batch_size):
+            chunk = rows[start:start + batch_size]
+            label = f"{chunk[0]['lesson_datetime'][:10]}" if chunk else ""
+            _print_progress(start, total, label)
+            added, skipped = client.batch_append_rows(chunk)
+            added_total += added
+            skipped_total += skipped
 
-    _print_progress(total, total, "готово")
+        _print_progress(total, total, "готово")
     print()
     print()
 

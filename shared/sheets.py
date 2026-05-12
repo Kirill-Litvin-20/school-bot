@@ -27,9 +27,10 @@ _PAYOUTS_SHEET   = "Выплаты"
 _BALANCES_SHEET  = "Балансы"
 _STATS_SHEET     = "Статистика"
 
-_JOURNAL_HEADER  = ["Дата-время", "Препод", "Ученик", "Направление",
+_JOURNAL_HEADER  = ["Дата", "Время", "День", "Препод", "Ученик", "Направление",
                     "Тариф", "Статус", "Баланс до", "Баланс после",
                     "Кто отметил", "ID отметки"]
+_WEEKDAYS_SHORT  = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 _PAYOUTS_HEADER  = ["Период", "Преподаватель", "Занятий", "Сумма"]
 _BALANCES_HEADER = ["Ученик", "Направление", "Препод", "Баланс", "Статус"]
 _STATS_HEADER    = ["Показатель", "Занятий", "", "День недели", "Занятий"]  # 5-col split view
@@ -54,6 +55,15 @@ _C_TOTAL_ROW       = {"red": 0.851, "green": 0.918, "blue": 0.827}
 
 def _rgb(c: dict) -> dict:
     return {"red": c["red"], "green": c["green"], "blue": c["blue"]}
+
+
+def _split_dt(dt_str: str) -> tuple[str, str, str]:
+    """Split 'YYYY-MM-DD HH:MM:SS' → ('dd.mm.yyyy', 'HH:MM', 'Пн'/'Вт'/…)."""
+    try:
+        dt = datetime.fromisoformat(str(dt_str)[:19])
+        return dt.strftime("%d.%m.%Y"), dt.strftime("%H:%M"), _WEEKDAYS_SHORT[dt.weekday()]
+    except Exception:
+        return str(dt_str), "", ""
 
 
 class SheetsClient:
@@ -219,29 +229,81 @@ class SheetsClient:
 
     def _format_journal(self, ws, spreadsheet) -> None:
         sheet_id = ws.id
-        col_widths = [150, 180, 180, 160, 110, 90, 100, 100, 160, 80]
+        n = len(_JOURNAL_HEADER)  # 12
+        # A=Дата B=Время C=День D=Препод E=Ученик F=Направление G=Тариф H=Статус I=Бал.до J=Бал.после K=Кто L=ID
+        col_widths = [90, 60, 40, 150, 150, 150, 85, 85, 80, 80, 140, 70]
         requests = [
-            self._header_format_request(sheet_id, len(_JOURNAL_HEADER), _C_JOURNAL_HEADER),
+            self._header_format_request(sheet_id, n, _C_JOURNAL_HEADER),
             self._freeze_request(sheet_id),
             {"updateDimensionProperties": {
                 "range": {"sheetId": sheet_id, "dimension": "ROWS", "startIndex": 0, "endIndex": 1},
                 "properties": {"pixelSize": 32}, "fields": "pixelSize",
             }},
-            self._cond_formula_request(sheet_id, '=$F2="Был"',      _C_GREEN_ROW, index=0, num_cols=len(_JOURNAL_HEADER)),
-            self._cond_formula_request(sheet_id, '=$F2="Не был"',   _C_RED_ROW,   index=1, num_cols=len(_JOURNAL_HEADER)),
-            self._cond_formula_request(sheet_id, '=$F2="Отменено"', _C_GREY_ROW,  index=2, num_cols=len(_JOURNAL_HEADER)),
+            self._cond_formula_request(sheet_id, '=$H2="Был"',      _C_GREEN_ROW, index=0, num_cols=n),
+            self._cond_formula_request(sheet_id, '=$H2="Не был"',   _C_RED_ROW,   index=1, num_cols=n),
+            self._cond_formula_request(sheet_id, '=$H2="Отменено"', _C_GREY_ROW,  index=2, num_cols=n),
         ] + self._col_widths_request(sheet_id, col_widths)
         self._batch_format(spreadsheet, requests)
 
     def apply_formatting(self, ws, spreadsheet) -> None:
         self._format_journal(ws, spreadsheet)
 
+    def _apply_week_borders(self, ws, spreadsheet) -> None:
+        """Draw thick top borders at each week transition (journal is newest-first)."""
+        try:
+            dates = ws.col_values(1)[1:]  # col A, skip header
+            if len(dates) < 2:
+                return
+            sheet_id = ws.id
+            requests = []
+            prev_week: tuple | None = None
+            for i, date_str in enumerate(dates):
+                try:
+                    dt = datetime.strptime(date_str.strip(), "%d.%m.%Y")
+                    wk = (dt.year, dt.isocalendar()[1])
+                except Exception:
+                    wk = None
+                if prev_week is not None and wk is not None and wk != prev_week:
+                    row_idx = i + 1  # 0-based (row 0=header, row 1=first data)
+                    requests.append({
+                        "updateBorders": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": row_idx, "endRowIndex": row_idx + 1,
+                                "startColumnIndex": 0, "endColumnIndex": len(_JOURNAL_HEADER),
+                            },
+                            "top": {"style": "SOLID_MEDIUM",
+                                    "color": {"red": 0.4, "green": 0.4, "blue": 0.4}},
+                        }
+                    })
+                prev_week = wk
+            if requests:
+                self._batch_format(spreadsheet, requests)
+        except Exception as exc:
+            logger.warning("Week borders failed: %s", exc)
+
     def _find_journal_row_by_id(self, ws, attendance_id: int) -> bool:
         try:
-            col_j = ws.col_values(10)
-            return str(attendance_id) in [str(v).strip() for v in col_j]
+            # ID is in col L (12) in new schema; also check col J (10) for migrated data
+            ids_l = set(str(v).strip() for v in ws.col_values(12) if v)
+            ids_j = set(str(v).strip() for v in ws.col_values(10) if v)
+            return str(attendance_id) in ids_l or str(attendance_id) in ids_j
         except Exception:
             return False
+
+    def _make_journal_row(self, row: dict[str, Any]) -> list:
+        date_s, time_s, day_s = _split_dt(row.get("lesson_datetime", ""))
+        status = _STATUS_LABELS.get(row.get("status", ""), row.get("status", ""))
+        tariff = _TARIFF_LABELS.get(row.get("tariff_type", ""), row.get("tariff_type", ""))
+        aid = row.get("attendance_id", "")
+        return [
+            date_s, time_s, day_s,
+            row.get("teacher_name", ""), row.get("student_name", ""),
+            row.get("subject_name", ""),
+            tariff, status,
+            row.get("balance_before", "—"), row.get("balance_after", "—"),
+            row.get("marked_by_name", ""), str(aid) if aid else "",
+        ]
 
     def append_attendance(self, row: dict[str, Any]) -> bool:
         if not self.is_configured():
@@ -255,25 +317,16 @@ class SheetsClient:
             aid = row.get("attendance_id")
             if aid and self._find_journal_row_by_id(ws, aid):
                 return True
-            status = _STATUS_LABELS.get(row.get("status", ""), row.get("status", ""))
-            tariff = _TARIFF_LABELS.get(row.get("tariff_type", ""), row.get("tariff_type", ""))
-            ws.append_row([
-                row.get("lesson_datetime", ""),
-                row.get("teacher_name", ""),
-                row.get("student_name", ""),
-                row.get("subject_name", ""),
-                tariff, status,
-                row.get("balance_before", "—"),
-                row.get("balance_after", "—"),
-                row.get("marked_by_name", ""),
-                str(aid) if aid else "",
-            ], value_input_option="USER_ENTERED")
+            ws.insert_rows([self._make_journal_row(row)], row=2,
+                           value_input_option="USER_ENTERED")
+            logger.info("Sheets: wrote attendance_id=%s", aid)
             return True
         except Exception as exc:
             logger.error("Journal append failed: %s", exc)
             return False
 
-    def batch_append_rows(self, rows: list[dict[str, Any]]) -> tuple[int, int]:
+    def batch_append_rows(self, rows: list[dict[str, Any]],
+                          rebuild: bool = False) -> tuple[int, int]:
         if not self.is_configured() or not rows:
             return 0, 0
         gc = self._get_client()
@@ -281,8 +334,23 @@ class SheetsClient:
             return 0, 0
         sp = gc.open_by_key(self._spreadsheet_id)
         ws = self._get_or_create_journal(sp)
+
+        if rebuild:
+            # Clear all data rows and rewrite everything newest-first
+            self._clear_data_rows(ws, cols=len(_JOURNAL_HEADER))
+            sorted_rows = sorted(rows,
+                                 key=lambda r: r.get("lesson_datetime", ""),
+                                 reverse=True)
+            to_add = [self._make_journal_row(r) for r in sorted_rows]
+            for i in range(0, len(to_add), 500):
+                ws.append_rows(to_add[i:i + 500], value_input_option="USER_ENTERED")
+            self._apply_week_borders(ws, sp)
+            return len(to_add), 0
+
+        # Incremental: check both col 12 (new) and col 10 (migrated)
         try:
-            existing = set(str(v).strip() for v in ws.col_values(10) if v)
+            existing = (set(str(v).strip() for v in ws.col_values(12) if v) |
+                        set(str(v).strip() for v in ws.col_values(10) if v))
         except Exception:
             existing = set()
         to_add, skipped = [], 0
@@ -291,15 +359,7 @@ class SheetsClient:
             if aid and aid in existing:
                 skipped += 1
                 continue
-            status = _STATUS_LABELS.get(row.get("status", ""), row.get("status", ""))
-            tariff = _TARIFF_LABELS.get(row.get("tariff_type", ""), row.get("tariff_type", ""))
-            to_add.append([
-                row.get("lesson_datetime", ""), row.get("teacher_name", ""),
-                row.get("student_name", ""), row.get("subject_name", ""),
-                tariff, status,
-                row.get("balance_before", "—"), row.get("balance_after", "—"),
-                row.get("marked_by_name", ""), aid,
-            ])
+            to_add.append(self._make_journal_row(row))
         for i in range(0, len(to_add), 500):
             ws.append_rows(to_add[i:i + 500], value_input_option="USER_ENTERED")
         return len(to_add), skipped
@@ -442,35 +502,92 @@ class SheetsClient:
         try:
             sp = gc.open_by_key(self._spreadsheet_id)
             ws = self._get_or_add_worksheet(sp, _STATS_SHEET, cols=5)
-            self._clear_data_rows(ws, cols=5)
+            ws.clear()
 
-            periods = [
-                ["Сегодня",       stats.get("today", 0)],
-                ["Эта неделя",    stats.get("week", 0)],
-                ["Этот месяц",    stats.get("month", 0)],
-                ["Всего",         stats.get("total", 0)],
+            _C_GREY_LIGHT = {"red": 0.937, "green": 0.937, "blue": 0.937}
+            _C_SECTION    = {"red": 0.851, "green": 0.886, "blue": 0.953}  # light blue section header
+
+            # ── Left column: periods + weekly history + monthly history ────────
+            periods_block = [
+                ["Сегодня",         stats.get("today", 0)],
+                ["Эта неделя",      stats.get("week", 0)],
+                ["Прошлая неделя",  stats.get("last_week", 0)],
+                ["Этот месяц",      stats.get("month", 0)],
+                ["Прошлый месяц",   stats.get("last_month", 0)],
+                ["Всего",           stats.get("total", 0)],
             ]
+
+            weekly  = stats.get("weekly_history", [])
+            monthly = stats.get("monthly_history", [])
+
+            # Build rows: header row 1, then data.
+            # Layout: col A=Показатель, B=Занятий, C=gap, D=День недели, E=Занятий
             weekdays = [[name, cnt] for name, cnt in stats.get("by_weekday", [])]
 
-            # Build a combined grid: left=periods, right=weekdays, same rows
-            rows_data: list[list] = []
-            max_rows = max(len(periods), len(weekdays))
-            for i in range(max_rows):
-                left  = periods[i]  if i < len(periods)  else ["", ""]
-                right = weekdays[i] if i < len(weekdays) else ["", ""]
-                rows_data.append([left[0], left[1], "", right[0], right[1]])
+            all_rows: list[list] = []
+            format_requests_meta: list[dict] = []  # {row_idx, type}
+
+            def _row(a="", b="", d="", e="") -> list:
+                return [a, b, "", d, e]
+
+            # Updated timestamp
+            all_rows.append(_row(f"Обновлено: {stats.get('updated_at', '')}"))
+            # blank
+            all_rows.append(_row())
+
+            # ── Period block ───────────────────────────────────────────────────
+            section_row = len(all_rows) + 2  # 1-based (header=1, so +1 for header offset)
+            all_rows.append(_row("▸ Периоды", "Занятий"))
+            format_requests_meta.append({"row": section_row, "type": "section_header"})
+
+            for i, (label, cnt) in enumerate(periods_block):
+                r = len(all_rows) + 2
+                wd_label, wd_cnt = (weekdays[i][0], weekdays[i][1]) if i < len(weekdays) else ("", "")
+                all_rows.append(_row(label, cnt, wd_label, wd_cnt))
+                if label == "Всего":
+                    format_requests_meta.append({"row": r, "type": "total"})
+
+            # Remaining weekdays
+            for i in range(len(periods_block), len(weekdays)):
+                all_rows.append(_row("", "", weekdays[i][0], weekdays[i][1]))
+
+            all_rows.append(_row())  # blank separator
+
+            # ── Weekly history block ───────────────────────────────────────────
+            if weekly:
+                section_row = len(all_rows) + 2
+                all_rows.append(_row("▸ По неделям", "Занятий"))
+                format_requests_meta.append({"row": section_row, "type": "section_header"})
+                for w in weekly:
+                    all_rows.append(_row(w["label"], w["count"]))
+                all_rows.append(_row())
+
+            # ── Monthly history block ──────────────────────────────────────────
+            if monthly:
+                section_row = len(all_rows) + 2
+                all_rows.append(_row("▸ По месяцам", "Занятий"))
+                format_requests_meta.append({"row": section_row, "type": "section_header"})
+                for m in monthly:
+                    all_rows.append(_row(m["label"], m["count"]))
 
             header_row = ["Показатель", "Занятий", "", "День недели", "Занятий"]
-            updated_row = [f"Обновлено: {stats.get('updated_at', '')}", "", "", "", ""]
-            ws.update("A1", [header_row, updated_row] + rows_data, value_input_option="USER_ENTERED")
+            ws.update("A1", [header_row] + all_rows, value_input_option="USER_ENTERED")
 
             sheet_id = ws.id
             requests = [
                 self._header_format_request(sheet_id, 5, _C_STATS_HEADER),
                 self._freeze_request(sheet_id),
-                # "Всего" row bold
-                self._row_format_request(sheet_id, 4, 5, {"red": 0.937, "green": 0.937, "blue": 0.937}, bold=True, num_cols=2),
-            ] + self._col_widths_request(sheet_id, [180, 90, 30, 180, 90])
+            ] + self._col_widths_request(sheet_id, [190, 90, 30, 190, 90])
+
+            for meta in format_requests_meta:
+                row_0 = meta["row"] - 1  # convert to 0-based
+                if meta["type"] == "section_header":
+                    requests.append(self._row_format_request(sheet_id, row_0, row_0 + 1,
+                                                             _C_SECTION, bold=True, num_cols=2))
+                elif meta["type"] == "total":
+                    requests.append(self._row_format_request(sheet_id, row_0, row_0 + 1,
+                                                             _C_GREY_LIGHT, bold=True, num_cols=2))
+
             self._batch_format(sp, requests)
             logger.info("Stats sheet updated")
             return True
@@ -487,9 +604,10 @@ class SheetsClient:
         try:
             sp = gc.open_by_key(self._spreadsheet_id)
             ws = self._get_or_create_journal(sp)
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            ws.append_row([now, "", "", "", "", "↩️ Отменено", "", "", cancelled_by, str(attendance_id)],
-                          value_input_option="USER_ENTERED")
+            now = datetime.now()
+            date_s, time_s, day_s = now.strftime("%d.%m.%Y"), now.strftime("%H:%M"), _WEEKDAYS_SHORT[now.weekday()]
+            ws.insert_rows([[date_s, time_s, day_s, "", "", "", "", "↩️ Отменено", "", "", cancelled_by, str(attendance_id)]],
+                           row=2, value_input_option="USER_ENTERED")
             return True
         except Exception as exc:
             logger.error("Sheets cancel failed: %s", exc)
