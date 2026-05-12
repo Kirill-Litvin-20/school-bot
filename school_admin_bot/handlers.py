@@ -133,12 +133,35 @@ from shared.database import (
     link_invitee_student,
 )
 from shared.sheets import get_sheets_client
-from shared.database import sheets_outbox_add
+from shared.database import (
+    sheets_outbox_add,
+    get_weekly_payouts,
+    get_all_student_balances,
+    get_attendance_stats,
+)
 
 router = Router()
 router.message.filter(F.chat.type == "private")
 router.callback_query.filter(F.message.chat.type == "private")
 logger = logging.getLogger(__name__)
+
+
+async def _update_summary_sheets_bg() -> None:
+    """Background: refresh Выплаты, Балансы, Статистика in Google Sheets."""
+    client = get_sheets_client()
+    if not client.is_configured():
+        return
+    for fetch_fn, update_fn, label in [
+        (get_weekly_payouts,       client.update_payouts_sheet,  "Выплаты"),
+        (get_all_student_balances, client.update_balances_sheet, "Балансы"),
+        (get_attendance_stats,     client.update_stats_sheet,    "Статистика"),
+    ]:
+        try:
+            data = await asyncio.to_thread(fetch_fn)
+            await asyncio.to_thread(update_fn, data)
+            logger.info("Sheets: %s refreshed", label)
+        except Exception as exc:
+            logger.warning("Sheets: %s refresh failed: %s", label, exc)
 
 
 async def _sync_attendance_to_sheets(
@@ -2518,6 +2541,7 @@ async def mark_student_attendance(callback: CallbackQuery):
         balance_after=lesson_balance_after,
         marked_by_name=marked_by_name,
     ))
+    asyncio.create_task(_update_summary_sheets_bg())
 
     student = get_student_by_id(student_id)
     student_telegram_id = student[2] if student else None
@@ -3036,6 +3060,41 @@ async def lreport_export_excel(callback: CallbackQuery):
     except Exception as exc:
         logger.error("Excel export error: %s", exc)
         await callback.message.answer("Ошибка при формировании Excel.")
+
+
+@router.callback_query(lambda c: c.data == "sheets_refresh_all")
+async def sheets_refresh_all(callback: CallbackQuery):
+    if not is_admin_role(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    client = get_sheets_client()
+    if not client.is_configured():
+        await callback.answer("Google Sheets не настроен.", show_alert=True)
+        return
+    await callback.answer("Обновляю таблицу, это займёт ~10 сек...")
+    await callback.message.answer("🔄 Обновляю все листы таблицы...")
+    asyncio.create_task(_do_sheets_refresh(callback.message))
+
+
+async def _do_sheets_refresh(message) -> None:
+    results = []
+    client = get_sheets_client()
+    for fetch_fn, update_fn, label in [
+        (get_weekly_payouts,       client.update_payouts_sheet,  "Выплаты"),
+        (get_all_student_balances, client.update_balances_sheet, "Балансы"),
+        (get_attendance_stats,     client.update_stats_sheet,    "Статистика"),
+    ]:
+        try:
+            data = await asyncio.to_thread(fetch_fn)
+            ok = await asyncio.to_thread(update_fn, data)
+            results.append(f"{'✅' if ok else '⚠️'} {label}")
+        except Exception as exc:
+            logger.warning("Sheets refresh %s failed: %s", label, exc)
+            results.append(f"❌ {label}: ошибка")
+    await message.answer(
+        "📊 <b>Таблица обновлена:</b>\n" + "\n".join(results),
+        parse_mode="HTML",
+    )
 
 
 @router.message(AdminStates.waiting_history_student_search)

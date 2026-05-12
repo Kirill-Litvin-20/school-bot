@@ -51,6 +51,7 @@ def get_superadmin_reports_menu():
             [InlineKeyboardButton(text="📊 Отчет по долгам", callback_data="admin_debt_report")],
             [InlineKeyboardButton(text="👨‍🏫 Занятия преподавателей", callback_data="admin_teacher_lessons_report")],
             [InlineKeyboardButton(text="📋 Журнал действий", callback_data="admin_actions_recent")],
+            [InlineKeyboardButton(text="🔄 Обновить таблицу", callback_data="sheets_refresh_all")],
             [InlineKeyboardButton(text="← Назад", callback_data="superadmin_back_main")],
         ]
     )

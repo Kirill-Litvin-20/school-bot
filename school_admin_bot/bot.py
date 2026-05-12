@@ -33,6 +33,9 @@ from shared.database import (
     sheets_outbox_pop_pending,
     sheets_outbox_delete,
     sheets_outbox_increment_attempts,
+    get_weekly_payouts,
+    get_all_student_balances,
+    get_attendance_stats,
 )
 from shared.sheets import get_sheets_client
 from shared.health import start_health_server
@@ -292,6 +295,72 @@ async def publication_worker():
             await publish_bot.session.close()
 
 
+async def update_summary_sheets() -> None:
+    """Push Выплаты, Балансы, Статистика to Google Sheets in background threads."""
+    logger = logging.getLogger(__name__)
+    client = get_sheets_client()
+    if not client.is_configured():
+        return
+    try:
+        payouts = await asyncio.to_thread(get_weekly_payouts)
+        await asyncio.to_thread(client.update_payouts_sheet, payouts)
+        logger.info("Sheets: Выплаты updated")
+    except Exception as exc:
+        logger.warning("Sheets: Выплаты update failed: %s", exc)
+    try:
+        balances = await asyncio.to_thread(get_all_student_balances)
+        await asyncio.to_thread(client.update_balances_sheet, balances)
+        logger.info("Sheets: Балансы updated")
+    except Exception as exc:
+        logger.warning("Sheets: Балансы update failed: %s", exc)
+    try:
+        stats = await asyncio.to_thread(get_attendance_stats)
+        await asyncio.to_thread(client.update_stats_sheet, stats)
+        logger.info("Sheets: Статистика updated")
+    except Exception as exc:
+        logger.warning("Sheets: Статистика update failed: %s", exc)
+
+
+async def sheets_summary_worker():
+    """Auto-update summary sheets:
+    - Every Tuesday 09:00 MSK → Выплаты + Балансы + Статистика
+    - Every day    06:00 MSK → Балансы + Статистика
+    """
+    logger = logging.getLogger(__name__)
+    last_tuesday_update = None
+    last_daily_update = None
+
+    while True:
+        try:
+            now = datetime.now(MSK_TZ)
+            today_str = now.strftime("%Y-%m-%d")
+
+            # Every Tuesday 09:00
+            if now.weekday() == 1 and now.hour == 9 and last_tuesday_update != today_str:
+                logger.info("Sheets: Tuesday payout update triggered")
+                await update_summary_sheets()
+                last_tuesday_update = today_str
+
+            # Every day 06:00
+            if now.hour == 6 and last_daily_update != today_str:
+                logger.info("Sheets: Daily stats update triggered")
+                try:
+                    client = get_sheets_client()
+                    if client.is_configured():
+                        balances = await asyncio.to_thread(get_all_student_balances)
+                        await asyncio.to_thread(client.update_balances_sheet, balances)
+                        stats = await asyncio.to_thread(get_attendance_stats)
+                        await asyncio.to_thread(client.update_stats_sheet, stats)
+                except Exception as exc:
+                    logger.warning("Sheets daily update failed: %s", exc)
+                last_daily_update = today_str
+
+        except Exception as exc:
+            logger.exception("Sheets summary worker error: %s", exc)
+
+        await asyncio.sleep(300)  # check every 5 minutes
+
+
 async def sheets_outbox_worker():
     """Retry attendance rows that failed to reach Google Sheets."""
     logger = logging.getLogger(__name__)
@@ -387,6 +456,7 @@ async def main():
     publication_task = asyncio.create_task(publication_worker())
     cleanup_task = asyncio.create_task(cleanup_worker())
     sheets_task = asyncio.create_task(sheets_outbox_worker())
+    sheets_summary_task = asyncio.create_task(sheets_summary_worker())
     try:
         while True:
             try:
@@ -411,6 +481,9 @@ async def main():
             await cleanup_task
         with contextlib.suppress(asyncio.CancelledError):
             await sheets_task
+        sheets_summary_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sheets_summary_task
         if health_runner is not None:
             await health_runner.cleanup()
 

@@ -4733,3 +4733,124 @@ def sheets_outbox_increment_attempts(outbox_id: int, error: str) -> None:
     )
     conn.commit()
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Sheets summary data — Выплаты / Балансы / Статистика
+# ---------------------------------------------------------------------------
+
+def get_weekly_payouts(weeks: int = 8) -> list[dict]:
+    """Return per-teacher lesson counts for the last N complete Mon–Sun weeks.
+
+    Returns list of dicts, most recent week first:
+      {week_start, week_end, teachers: [{name, lessons}], total_lessons}
+    """
+    from datetime import date as _date
+    conn = get_connection()
+    cur = conn.cursor()
+
+    today = _date.today()
+    # Most recent complete Sunday
+    last_sunday = today - timedelta(days=(today.weekday() + 1) % 7)
+    last_monday = last_sunday - timedelta(days=6)
+
+    result = []
+    for i in range(weeks):
+        w_start = last_monday - timedelta(weeks=i)
+        w_end = w_start + timedelta(days=6)
+        start_dt = f"{w_start.isoformat()} 00:00:00"
+        end_dt = f"{w_end.isoformat()} 23:59:59"
+
+        cur.execute(
+            """
+            SELECT t.full_name, COUNT(DISTINCT a.id) AS lessons
+            FROM attendance a
+            JOIN student_lessons sl ON a.student_lesson_id = sl.id
+            JOIN teachers t ON sl.teacher_id = t.id
+            WHERE a.lesson_date BETWEEN ? AND ?
+              AND a.status IN ('present', 'completed')
+            GROUP BY t.id, t.full_name
+            ORDER BY t.full_name
+            """,
+            (start_dt, end_dt),
+        )
+        rows = cur.fetchall()
+        if rows:
+            teachers = [{"name": r[0], "lessons": int(r[1])} for r in rows]
+            result.append({
+                "week_start": w_start.isoformat(),
+                "week_end": w_end.isoformat(),
+                "teachers": teachers,
+                "total_lessons": sum(t["lessons"] for t in teachers),
+            })
+
+    conn.close()
+    return result
+
+
+def get_all_student_balances() -> list[dict]:
+    """Return all active student directions sorted by balance ascending."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT st.full_name, sl.subject_name, t.full_name, sl.lesson_balance, sl.tariff_type
+        FROM student_lessons sl
+        JOIN students st ON sl.student_id = st.id
+        JOIN teachers t ON sl.teacher_id = t.id
+        WHERE st.is_active = 1
+        ORDER BY sl.lesson_balance ASC, st.full_name
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    tariff_labels = {"package": "Пакет", "per_lesson": "Поурочно", "subscription": "Абонемент"}
+    return [
+        {
+            "student_name": r[0] or "—",
+            "subject_name": r[1] or "—",
+            "teacher_name": r[2] or "—",
+            "lesson_balance": int(r[3] or 0),
+            "tariff_type": tariff_labels.get(r[4] or "", r[4] or "—"),
+        }
+        for r in rows
+    ]
+
+
+def get_attendance_stats() -> dict:
+    """Return summary stats for the Статистика sheet."""
+    from datetime import date as _date
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT lesson_date FROM attendance WHERE status IN ('present', 'completed') ORDER BY lesson_date"
+    )
+    all_dates = [r[0][:10] for r in cur.fetchall() if r[0]]
+    conn.close()
+
+    today = _date.today()
+    today_str = today.isoformat()
+    week_start_str = (today - timedelta(days=today.weekday())).isoformat()
+    month_start_str = today.replace(day=1).isoformat()
+
+    today_count = sum(1 for d in all_dates if d == today_str)
+    week_count = sum(1 for d in all_dates if d >= week_start_str)
+    month_count = sum(1 for d in all_dates if d >= month_start_str)
+
+    weekday_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    weekday_counts = [0] * 7
+    for d in all_dates:
+        try:
+            weekday_counts[_date.fromisoformat(d).weekday()] += 1
+        except Exception:
+            pass
+
+    return {
+        "today": today_count,
+        "week": week_count,
+        "month": month_count,
+        "total": len(all_dates),
+        "by_weekday": list(zip(weekday_names, weekday_counts)),
+        "updated_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
+    }
