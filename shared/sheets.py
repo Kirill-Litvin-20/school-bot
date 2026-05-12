@@ -314,7 +314,7 @@ class SheetsClient:
             return False
         try:
             sp = gc.open_by_key(self._spreadsheet_id)
-            ws = self._get_or_create_worksheet(sp, _PAYOUTS_SHEET, cols=4)
+            ws = self._get_or_add_worksheet(sp, _PAYOUTS_SHEET, cols=4)
             self._clear_data_rows(ws, cols=4)
 
             rows_data: list[list] = []
@@ -388,7 +388,7 @@ class SheetsClient:
             return False
         try:
             sp = gc.open_by_key(self._spreadsheet_id)
-            ws = self._get_or_create_worksheet(sp, _BALANCES_SHEET, cols=5)
+            ws = self._get_or_add_worksheet(sp, _BALANCES_SHEET, cols=5)
             self._clear_data_rows(ws, cols=5)
 
             rows_data: list[list] = []
@@ -441,7 +441,7 @@ class SheetsClient:
             return False
         try:
             sp = gc.open_by_key(self._spreadsheet_id)
-            ws = self._get_or_create_worksheet(sp, _STATS_SHEET, cols=5)
+            ws = self._get_or_add_worksheet(sp, _STATS_SHEET, cols=5)
             self._clear_data_rows(ws, cols=5)
 
             periods = [
