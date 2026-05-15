@@ -5170,3 +5170,8 @@ def get_recent_payment_history_by_max_user(max_user_id: int, limit: int = 4) -> 
     rows = cur.fetchall()
     conn.close()
     return rows
+
+
+def get_active_promo_for_user(telegram_user_id: int):
+    """Stub — promo system not yet implemented. Returns None."""
+    return None

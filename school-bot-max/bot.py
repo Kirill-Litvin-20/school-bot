@@ -70,6 +70,8 @@ async def process_update(api: MaxApiClient, update: dict) -> None:
         elif update_type == "message_callback":
             cb = update.get("callback", {})
             user = cb.get("user", {})
+            orig_msg = update.get("message") or {}
+            message_id = (orig_msg.get("body") or {}).get("mid")
             await handle_callback(
                 api=api,
                 callback_id=cb.get("callback_id", ""),
@@ -77,6 +79,7 @@ async def process_update(api: MaxApiClient, update: dict) -> None:
                 username=user.get("username"),
                 name=user.get("name", ""),
                 payload=cb.get("payload", ""),
+                message_id=message_id,
             )
 
     except Exception:

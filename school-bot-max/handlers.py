@@ -41,7 +41,9 @@ from keyboards import (
     main_menu_kb,
     offers_kb,
     subjects_kb,
+    teacher_card_kb,
     teacher_choice_kb,
+    teacher_subjects_kb,
     teachers_list_kb,
     user_type_kb,
 )
@@ -169,13 +171,50 @@ def _build_application_text(data: dict) -> str:
     )
 
 
-async def _show_menu(api: MaxApiClient, user_id: int, data: dict | None = None) -> None:
-    await set_max_fsm_state(user_id, MENU, data or {})
-    await api.send_message(
-        user_id,
-        "📋 Выберите нужный раздел:",
-        main_menu_kb(),
-    )
+async def _reply(
+    api: MaxApiClient, user_id: int, message_id: str | None, text: str, kb=None
+) -> dict:
+    """Edit message_id if available, otherwise send a new message."""
+    if message_id:
+        try:
+            return await api.edit_message(message_id, text, kb)
+        except Exception as exc:
+            logger.debug("edit_message mid=%s failed: %s", message_id, exc)
+    return await api.send_message(user_id, text, kb)
+
+
+async def _show_menu(
+    api: MaxApiClient, user_id: int, data: dict | None = None, message_id: str | None = None
+) -> None:
+    set_max_fsm_state(user_id, MENU, data or {})
+    await _reply(api, user_id, message_id, "📋 Выберите нужный раздел:", main_menu_kb())
+
+
+_SERVER_BASE_URL = "http://151.243.176.132"
+
+
+async def _send_teacher_card(
+    api: MaxApiClient,
+    user_id: int,
+    message_id: str | None,
+    subject: str,
+    cards: list[dict],
+    index: int,
+) -> None:
+    card = cards[index]
+    name = (card.get("name") or "").strip()
+    description = card.get("description") or "Описание будет добавлено позже."
+    text = f"👨‍🏫 {name}\n📚 Предмет: {subject}\n\n{description}"
+    kb = teacher_card_kb(index, len(cards))
+    photo_path = (card.get("photo") or "").strip()
+    if photo_path:
+        photo_url = f"{_SERVER_BASE_URL}/{photo_path}"
+        try:
+            await api.send_photo_url(user_id, photo_url, caption=text, attachments=kb)
+            return
+        except Exception as exc:
+            logger.warning("Teacher photo send failed %s: %s", photo_url, exc)
+    await _reply(api, user_id, message_id, text, kb)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -190,7 +229,7 @@ async def handle_bot_started(api: MaxApiClient, user_id: int, name: str, usernam
     students = find_students_by_max_id(user_id)
     if students:
         student_name = students[0][1]
-        await set_max_fsm_state(user_id, MENU)
+        set_max_fsm_state(user_id, MENU)
         await api.send_message(
             user_id,
             f"👋 Добро пожаловать, {student_name}!\n\nВаш личный кабинет уже привязан.",
@@ -198,7 +237,7 @@ async def handle_bot_started(api: MaxApiClient, user_id: int, name: str, usernam
         )
         return
 
-    await set_max_fsm_state(user_id, LINK_PHONE)
+    set_max_fsm_state(user_id, LINK_PHONE)
     await api.send_message(
         user_id,
         "👋 Добро пожаловать в бот учебного центра!\n\n"
@@ -255,12 +294,12 @@ async def handle_text(
         else:
             await api.send_message(user_id, "❓ Напишите: ученик или родитель.")
             return
-        await set_max_fsm_state(user_id, APP_NAME, data)
+        set_max_fsm_state(user_id, APP_NAME, data)
         await api.send_message(user_id, "📝 Напишите, как к вам обращаться (имя или имя + фамилия):")
 
     elif state == APP_NAME:
         data["name"] = text
-        await set_max_fsm_state(user_id, APP_CLASS, data)
+        set_max_fsm_state(user_id, APP_CLASS, data)
         await api.send_message(user_id, "🏫 Выберите класс:", class_kb())
 
     elif state == APP_COMMENT:
@@ -272,7 +311,7 @@ async def handle_text(
 
     elif state == APP_TEACHER_NAME:
         data["teacher_name"] = text
-        await set_max_fsm_state(user_id, APP_CONTACT_METHOD, data)
+        set_max_fsm_state(user_id, APP_CONTACT_METHOD, data)
         await api.send_message(user_id, "📞 Как с вами связаться?", contact_method_kb())
 
     elif state == PAYMENT_PROOF:
@@ -335,6 +374,7 @@ async def handle_callback(
     username: str | None,
     name: str,
     payload: str,
+    message_id: str | None = None,
 ) -> None:
     state, data = get_max_fsm_state(user_id)
     if not state:
@@ -342,7 +382,7 @@ async def handle_callback(
         data = {}
 
     try:
-        await _dispatch_callback(api, callback_id, user_id, username, name, payload, state, data)
+        await _dispatch_callback(api, callback_id, user_id, username, name, payload, state, data, message_id)
     except Exception:
         logger.exception("callback dispatch error user=%s payload=%s", user_id, payload)
         await api.answer_callback(callback_id)
@@ -366,7 +406,7 @@ async def _handle_link_phone_text(
     student = try_auto_link_max_by_phone(text, user_id, username)
     if student:
         student_name = student[1]
-        await set_max_fsm_state(user_id, MENU)
+        set_max_fsm_state(user_id, MENU)
         await api.send_message(
             user_id,
             f"✅ Отлично! Ваш кабинет привязан.\n\nДобро пожаловать, {student_name}!",
@@ -374,7 +414,7 @@ async def _handle_link_phone_text(
         )
         return
 
-    await set_max_fsm_state(user_id, LINK_CODE)
+    set_max_fsm_state(user_id, LINK_CODE)
     await api.send_message(
         user_id,
         "🔍 Телефон не найден в базе.\n\n"
@@ -407,14 +447,14 @@ async def _handle_link_code(
         for student in students:
             link_max_to_student(student[0], user_id, username)
         student_name = students[0][1]
-        await set_max_fsm_state(user_id, MENU)
+        set_max_fsm_state(user_id, MENU)
         await api.send_message(
             user_id,
             f"✅ Аккаунты связаны! Добро пожаловать, {student_name}!",
             main_menu_kb(),
         )
     else:
-        await set_max_fsm_state(user_id, MENU)
+        set_max_fsm_state(user_id, MENU)
         await api.send_message(
             user_id,
             "✅ Код принят. Ваш Telegram-аккаунт связан с MAX.\n"
@@ -523,7 +563,7 @@ async def _process_payment_file(
         "✅ Чек отправлен на проверку. После подтверждения занятия будут начислены на ваш баланс.",
         main_menu_kb(),
     )
-    await set_max_fsm_state(user_id, MENU)
+    set_max_fsm_state(user_id, MENU)
 
 
 async def _dispatch_callback(
@@ -535,38 +575,35 @@ async def _dispatch_callback(
     payload: str,
     state: str,
     data: dict,
+    message_id: str | None = None,
 ) -> None:
     await api.answer_callback(callback_id)
 
     if payload == "back_to_menu":
-        await _show_menu(api, user_id, {k: v for k, v in data.items() if k == "user_type"})
+        await _show_menu(api, user_id, {k: v for k, v in data.items() if k == "user_type"}, message_id=message_id)
         return
 
     if payload == "back_step":
-        await _handle_back(api, user_id, state, data)
+        await _handle_back(api, user_id, state, data, message_id)
         return
 
     if payload == "menu_signup":
         data_new = {k: v for k, v in data.items() if k == "user_type"}
-        await set_max_fsm_state(user_id, APP_USER_TYPE, data_new)
-        await api.send_message(
-            user_id,
-            "Пожалуйста, укажите: вы ученик или родитель?",
-            user_type_kb(),
-        )
+        set_max_fsm_state(user_id, APP_USER_TYPE, data_new)
+        await _reply(api, user_id, message_id, "Пожалуйста, укажите: вы ученик или родитель?", user_type_kb())
         return
 
     if payload in ("user_student", "user_parent"):
         data["user_type"] = "Ученик" if payload == "user_student" else "Родитель"
-        await set_max_fsm_state(user_id, APP_NAME, data)
-        await api.send_message(user_id, "📝 Напишите, как к вам обращаться:")
+        set_max_fsm_state(user_id, APP_NAME, data)
+        await _reply(api, user_id, message_id, "📝 Напишите, как к вам обращаться:")
         return
 
     if payload == "menu_cabinet":
         students = find_students_by_max_id(user_id)
         if not students:
-            await api.send_message(
-                user_id,
+            await _reply(
+                api, user_id, message_id,
                 "❌ Мы пока не нашли вас в базе учеников.\n"
                 "Введите номер телефона для привязки или обратитесь к администратору.",
             )
@@ -575,20 +612,17 @@ async def _dispatch_callback(
         directions = get_student_directions(student_id)
         payments = get_recent_payment_history_by_max_user(user_id, limit=4)
         text = _build_cabinet_text(student_name, directions, payments)
-        await api.send_message(user_id, text, cabinet_kb())
+        await _reply(api, user_id, message_id, text, cabinet_kb())
         return
 
     if payload == "menu_paid":
         students = find_students_by_max_id(user_id)
         if not students:
-            await api.send_message(
-                user_id,
-                "❌ Вы не зарегистрированы в системе. Обратитесь к администратору.",
-            )
+            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе. Обратитесь к администратору.")
             return
-        await set_max_fsm_state(user_id, PAYMENT_PROOF, data)
-        await api.send_message(
-            user_id,
+        set_max_fsm_state(user_id, PAYMENT_PROOF, data)
+        await _reply(
+            api, user_id, message_id,
             f"💳 РЕКВИЗИТЫ ДЛЯ ОПЛАТЫ\n\n"
             f"🏦 Номер счёта: {PAYMENT_BANK_NUMBER}\n"
             f"🏢 Банк: {PAYMENT_BANK_NAME}\n"
@@ -599,23 +633,66 @@ async def _dispatch_callback(
         return
 
     if payload == "menu_teachers":
-        from shared.database import get_teacher_catalog_subjects, get_teacher_cards_by_subject
+        from shared.database import get_teacher_catalog_subjects
         subjects = get_teacher_catalog_subjects()
         if not subjects:
-            await api.send_message(user_id, "Список преподавателей пока пуст.")
+            await _reply(api, user_id, message_id, "Список преподавателей пока пуст.")
             return
-        lines = ["👨‍🏫 Наши преподаватели:\n"]
-        for subject in subjects:
-            cards = get_teacher_cards_by_subject(subject)
-            for card in cards:
-                teacher_name = (card.get("name") or "").strip()
-                description = (card.get("description") or "Описание будет добавлено позже.")
-                lines.append(f"📚 {subject} — {teacher_name}\n{description}\n")
-        await api.send_message(user_id, "\n".join(lines), back_menu_kb())
+        await _reply(api, user_id, message_id, "👨‍🏫 Выберите предмет:", teacher_subjects_kb(subjects))
+        return
+
+    if payload.startswith("teacher_subject_"):
+        subject = payload.split("teacher_subject_", 1)[1]
+        from shared.database import get_teacher_cards_by_subject
+        cards = [c for c in get_teacher_cards_by_subject(subject) if (c.get("name") or "").strip()]
+        if not cards:
+            await _reply(api, user_id, message_id, f"По предмету «{subject}» преподаватели не добавлены.", back_menu_kb())
+            return
+        data["teacher_subject"] = subject
+        data["teacher_index"] = 0
+        set_max_fsm_state(user_id, MENU, data)
+        await _send_teacher_card(api, user_id, message_id, subject, cards, 0)
+        return
+
+    if payload in ("teacher_prev", "teacher_next"):
+        subject = data.get("teacher_subject", "")
+        index = int(data.get("teacher_index", 0))
+        from shared.database import get_teacher_cards_by_subject
+        cards = [c for c in get_teacher_cards_by_subject(subject) if (c.get("name") or "").strip()]
+        if not cards:
+            await _show_menu(api, user_id, data, message_id=message_id)
+            return
+        index = max(0, index - 1) if payload == "teacher_prev" else min(len(cards) - 1, index + 1)
+        data["teacher_index"] = index
+        set_max_fsm_state(user_id, MENU, data)
+        await _send_teacher_card(api, user_id, message_id, subject, cards, index)
+        return
+
+    if payload == "teacher_back_to_subjects":
+        from shared.database import get_teacher_catalog_subjects
+        subjects = get_teacher_catalog_subjects()
+        await _reply(api, user_id, message_id, "👨‍🏫 Выберите предмет:", teacher_subjects_kb(subjects))
+        return
+
+    if payload == "teacher_signup":
+        subject = data.get("teacher_subject", "")
+        index = int(data.get("teacher_index", 0))
+        from shared.database import get_teacher_cards_by_subject
+        cards = [c for c in get_teacher_cards_by_subject(subject) if (c.get("name") or "").strip()]
+        teacher_name = (cards[index].get("name") or "") if 0 <= index < len(cards) else ""
+        data_new = {k: v for k, v in data.items() if k not in ("teacher_subject", "teacher_index")}
+        data_new["teacher_choice"] = "Выбрать конкретного"
+        data_new["teacher_name"] = f"{teacher_name} - {subject}"
+        if not data_new.get("user_type"):
+            set_max_fsm_state(user_id, APP_USER_TYPE, data_new)
+            await _reply(api, user_id, message_id, "Пожалуйста, укажите: вы ученик или родитель?", user_type_kb())
+        else:
+            set_max_fsm_state(user_id, APP_CONTACT_METHOD, data_new)
+            await _reply(api, user_id, message_id, "📞 Как с вами связаться?", contact_method_kb())
         return
 
     if payload == "menu_offers":
-        await api.send_message(user_id, "🎁 СПЕЦИАЛЬНЫЕ ПРЕДЛОЖЕНИЯ\n\nВыберите предложение:", offers_kb())
+        await _reply(api, user_id, message_id, "🎁 СПЕЦИАЛЬНЫЕ ПРЕДЛОЖЕНИЯ\n\nВыберите предложение:", offers_kb())
         return
 
     if payload in ("offer_free_diagnosis", "offer_first_package", "offer_referral_program"):
@@ -640,16 +717,16 @@ async def _dispatch_callback(
                 "Реферальная ссылка доступна в Telegram-боте школы."
             ),
         }
-        await api.send_message(user_id, texts[payload], back_menu_kb())
+        await _reply(api, user_id, message_id, texts[payload], back_menu_kb())
         return
 
     if payload == "menu_faq":
-        await api.send_message(user_id, "❓ ПОМОЩЬ И ЧАСТЫЕ ВОПРОСЫ", faq_kb())
+        await _reply(api, user_id, message_id, "❓ ПОМОЩЬ И ЧАСТЫЕ ВОПРОСЫ", faq_kb())
         return
 
     if payload == "faq_pay":
-        await api.send_message(
-            user_id,
+        await _reply(
+            api, user_id, message_id,
             f"💳 КАК ОПЛАТИТЬ ЗАНЯТИЯ\n\n"
             f"Реквизиты:\n"
             f"🏦 {PAYMENT_BANK_NUMBER}\n"
@@ -665,8 +742,8 @@ async def _dispatch_callback(
         return
 
     if payload == "faq_package":
-        await api.send_message(
-            user_id,
+        await _reply(
+            api, user_id, message_id,
             "📦 ЧТО ТАКОЕ ПАКЕТ ЗАНЯТИЙ\n\n"
             "Пакет — это несколько занятий, оплаченных сразу, по сниженной цене за одно.\n"
             "Чем больше пакет, тем ниже цена за занятие.\n"
@@ -676,8 +753,8 @@ async def _dispatch_callback(
         return
 
     if payload == "faq_reschedule":
-        await api.send_message(
-            user_id,
+        await _reply(
+            api, user_id, message_id,
             "🔄 ПЕРЕНОС И ОТМЕНА ЗАНЯТИЙ\n\n"
             "Предупредите преподавателя или администратора не позже чем за 6 часов.\n"
             "Тогда занятие не списывается с баланса.\n\n"
@@ -689,21 +766,21 @@ async def _dispatch_callback(
     # ── Application form callbacks ─────────────────────────────────────────
     if payload.startswith("class_"):
         data["school_class"] = payload.split("class_", 1)[1]
-        await set_max_fsm_state(user_id, APP_GOAL, data)
-        await api.send_message(user_id, "🎯 Выберите цель обучения:", goal_kb())
+        set_max_fsm_state(user_id, APP_GOAL, data)
+        await _reply(api, user_id, message_id, "🎯 Выберите цель обучения:", goal_kb())
         return
 
     if payload.startswith("goal_"):
         data["goal"] = payload.split("goal_", 1)[1]
-        await set_max_fsm_state(user_id, APP_LESSON_TYPE, data)
-        await api.send_message(user_id, "📚 Выберите формат занятий:", lesson_type_kb())
+        set_max_fsm_state(user_id, APP_LESSON_TYPE, data)
+        await _reply(api, user_id, message_id, "📚 Выберите формат занятий:", lesson_type_kb())
         return
 
     if payload in ("lesson_individual", "lesson_group"):
         data["lesson_type"] = "Индивидуально" if payload == "lesson_individual" else "Мини-группа"
         data.setdefault("subjects", [])
-        await set_max_fsm_state(user_id, APP_SUBJECTS, data)
-        await api.send_message(user_id, "📖 Выберите предметы (можно несколько):", subjects_kb(data["subjects"]))
+        set_max_fsm_state(user_id, APP_SUBJECTS, data)
+        await _reply(api, user_id, message_id, "📖 Выберите предметы (можно несколько):", subjects_kb(data["subjects"]))
         return
 
     if payload.startswith("subject_"):
@@ -714,28 +791,28 @@ async def _dispatch_callback(
         else:
             subjects.append(subj)
         data["subjects"] = subjects
-        await set_max_fsm_state(user_id, APP_SUBJECTS, data)
-        await api.send_message(user_id, "📖 Выберите предметы (✅ — выбраны):", subjects_kb(subjects))
+        set_max_fsm_state(user_id, APP_SUBJECTS, data)
+        await _reply(api, user_id, message_id, "📖 Выберите предметы (✅ — выбраны):", subjects_kb(subjects))
         return
 
     if payload == "subjects_done":
         if not data.get("subjects"):
-            await api.send_message(user_id, "❓ Выберите хотя бы один предмет.", subjects_kb([]))
+            await _reply(api, user_id, message_id, "❓ Выберите хотя бы один предмет.", subjects_kb([]))
             return
-        await set_max_fsm_state(user_id, APP_TEACHER_CHOICE, data)
-        await api.send_message(user_id, "👨‍🏫 Как выбрать преподавателя?", teacher_choice_kb())
+        set_max_fsm_state(user_id, APP_TEACHER_CHOICE, data)
+        await _reply(api, user_id, message_id, "👨‍🏫 Как выбрать преподавателя?", teacher_choice_kb())
         return
 
     if payload == "teacher_pick":
         data["teacher_choice"] = "Подобрать преподавателя"
-        await set_max_fsm_state(user_id, APP_CONTACT_METHOD, data)
-        await api.send_message(user_id, "📞 Как с вами связаться?", contact_method_kb())
+        set_max_fsm_state(user_id, APP_CONTACT_METHOD, data)
+        await _reply(api, user_id, message_id, "📞 Как с вами связаться?", contact_method_kb())
         return
 
     if payload == "teacher_specific":
         data["teacher_choice"] = "Выбрать конкретного"
-        await set_max_fsm_state(user_id, APP_TEACHER_NAME, data)
-        await api.send_message(user_id, "👨‍🏫 Выберите преподавателя:", teachers_list_kb())
+        set_max_fsm_state(user_id, APP_TEACHER_NAME, data)
+        await _reply(api, user_id, message_id, "👨‍🏫 Выберите преподавателя:", teachers_list_kb())
         return
 
     if payload.startswith("pick_teacher_"):
@@ -748,8 +825,8 @@ async def _dispatch_callback(
                 seen.append(label)
         if 0 <= idx < len(seen):
             data["teacher_name"] = seen[idx]
-        await set_max_fsm_state(user_id, APP_CONTACT_METHOD, data)
-        await api.send_message(user_id, "📞 Как с вами связаться?", contact_method_kb())
+        set_max_fsm_state(user_id, APP_CONTACT_METHOD, data)
+        await _reply(api, user_id, message_id, "📞 Как с вами связаться?", contact_method_kb())
         return
 
     if payload.startswith("contact_"):
@@ -757,25 +834,14 @@ async def _dispatch_callback(
         data["contact_method"] = method
         if method == "MAX":
             data["contact_value"] = f"@{username}" if username else f"MAX:{user_id}"
-            await set_max_fsm_state(user_id, APP_COMMENT, data)
-            await api.send_message(
-                user_id,
-                "💬 Оставьте комментарий или напишите «-» чтобы пропустить:",
-            )
+            set_max_fsm_state(user_id, APP_COMMENT, data)
+            await _reply(api, user_id, message_id, "💬 Оставьте комментарий или напишите «-» чтобы пропустить:")
         elif method == "Telegram":
-            await set_max_fsm_state(user_id, APP_CONTACT_VALUE, data)
-            await api.send_message(
-                user_id,
-                "📱 Введите ваш Telegram @username (например: @username):",
-                back_kb(),
-            )
+            set_max_fsm_state(user_id, APP_CONTACT_VALUE, data)
+            await _reply(api, user_id, message_id, "📱 Введите ваш Telegram @username (например: @username):", back_kb())
         else:  # Звонок
-            await set_max_fsm_state(user_id, APP_CONTACT_VALUE, data)
-            await api.send_message(
-                user_id,
-                "📞 Введите номер телефона для звонка (например: +79001234567):",
-                back_kb(),
-            )
+            set_max_fsm_state(user_id, APP_CONTACT_VALUE, data)
+            await _reply(api, user_id, message_id, "📞 Введите номер телефона для звонка (например: +79001234567):", back_kb())
         return
 
     if payload == "noop":
@@ -783,7 +849,7 @@ async def _dispatch_callback(
 
     # Unhandled — go to menu
     logger.debug("Unhandled callback payload=%s state=%s", payload, state)
-    await _show_menu(api, user_id, data)
+    await _show_menu(api, user_id, data, message_id=message_id)
 
 
 async def _handle_contact_value(
@@ -805,7 +871,7 @@ async def _handle_contact_value(
             )
             return
     data["contact_value"] = text
-    await set_max_fsm_state(user_id, APP_COMMENT, data)
+    set_max_fsm_state(user_id, APP_COMMENT, data)
     await api.send_message(
         user_id,
         "💬 Оставьте комментарий к заявке или напишите «-» чтобы пропустить:",
@@ -813,7 +879,7 @@ async def _handle_contact_value(
 
 
 async def _handle_back(
-    api: MaxApiClient, user_id: int, state: str, data: dict
+    api: MaxApiClient, user_id: int, state: str, data: dict, message_id: str | None = None
 ) -> None:
     back_map = {
         APP_NAME:           (APP_USER_TYPE, "Пожалуйста, укажите: вы ученик или родитель?", user_type_kb()),
@@ -829,10 +895,10 @@ async def _handle_back(
     }
     if state in back_map:
         new_state, prompt, kb = back_map[state]
-        await set_max_fsm_state(user_id, new_state, data)
-        await api.send_message(user_id, prompt, kb)
+        set_max_fsm_state(user_id, new_state, data)
+        await _reply(api, user_id, message_id, prompt, kb)
     else:
-        await _show_menu(api, user_id, data)
+        await _show_menu(api, user_id, data, message_id=message_id)
 
 
 async def _submit_application(api: MaxApiClient, user_id: int, data: dict) -> None:
@@ -849,7 +915,7 @@ async def _submit_application(api: MaxApiClient, user_id: int, data: dict) -> No
         )
         return
 
-    await set_max_fsm_state(user_id, MENU, {k: v for k, v in data.items() if k == "user_type"})
+    set_max_fsm_state(user_id, MENU, {k: v for k, v in data.items() if k == "user_type"})
     await api.send_message(
         user_id,
         "✅ Заявка отправлена! Мы свяжемся с вами в ближайшее время.",

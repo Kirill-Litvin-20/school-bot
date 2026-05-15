@@ -66,6 +66,13 @@ class MaxApiClient:
                 resp.raise_for_status()
                 return await resp.json()
 
+    async def _put(self, path: str, body: dict, **params) -> dict:
+        url = f"{_BASE}{path}"
+        async with aiohttp.ClientSession(headers=self._headers) as session:
+            async with session.put(url, json=body, params=params or None) as resp:
+                resp.raise_for_status()
+                return await resp.json()
+
     # ── updates ────────────────────────────────────────────────────────────
 
     async def get_updates(self, offset: int = 0, timeout: int = 25) -> dict:
@@ -84,6 +91,29 @@ class MaxApiClient:
             body["attachments"] = attachments
         return await self._post("/messages", body, user_id=user_id)
 
+    async def send_to_chat(
+        self,
+        chat_id: int,
+        text: str,
+        attachments: list[dict] | None = None,
+    ) -> dict:
+        body: dict[str, Any] = {"text": text}
+        if attachments:
+            body["attachments"] = attachments
+        return await self._post("/messages", body, chat_id=chat_id)
+
+    async def send_photo_to_chat(
+        self,
+        chat_id: int,
+        url: str,
+        caption: str = "",
+    ) -> dict:
+        photo_att = {"type": "image", "payload": {"url": url}}
+        body: dict[str, Any] = {"attachments": [photo_att]}
+        if caption:
+            body["text"] = caption
+        return await self._post("/messages", body, chat_id=chat_id)
+
     async def send_photo_url(
         self,
         user_id: int,
@@ -91,7 +121,7 @@ class MaxApiClient:
         caption: str = "",
         attachments: list[dict] | None = None,
     ) -> dict:
-        photo_att = {"type": "photo", "payload": {"url": url}}
+        photo_att = {"type": "image", "payload": {"url": url}}
         atts = [photo_att] + (attachments or [])
         body: dict[str, Any] = {"attachments": atts}
         if caption:
@@ -106,7 +136,11 @@ class MaxApiClient:
         body: dict[str, Any] = {"callback_id": callback_id}
         if notification:
             body["notification"] = notification
-        return await self._post("/answers", body)
+        try:
+            return await self._post("/answers", body)
+        except Exception as exc:
+            logger.debug("answer_callback failed (non-critical): %s", exc)
+            return {}
 
     # ── file download ───────────────────────────────────────────────────────
 
@@ -115,6 +149,17 @@ class MaxApiClient:
             async with session.get(url) as resp:
                 resp.raise_for_status()
                 return await resp.read()
+
+    async def edit_message(
+        self,
+        message_id: str,
+        text: str,
+        attachments: list[dict] | None = None,
+    ) -> dict:
+        body: dict[str, Any] = {"text": text}
+        if attachments:
+            body["attachments"] = attachments
+        return await self._put("/messages", body, message_id=message_id)
 
     # ── bot info ───────────────────────────────────────────────────────────
 
