@@ -12,7 +12,7 @@ from pathlib import Path
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from config import SCHOOL_BOT_PAYMENTS_CHAT_ID, SCHOOL_BOT_TOKEN, SCHOOL_BOT_USERNAME, SUPERADMINS
+from config import MAX_BOT_TOKEN, SCHOOL_BOT_PAYMENTS_CHAT_ID, SCHOOL_BOT_TOKEN, SCHOOL_BOT_USERNAME, SUPERADMINS
 
 from _utils import (
     BOT_DIR,
@@ -68,6 +68,7 @@ from keyboards import (
     get_publication_schedule_keyboard,
     get_lessons_report_period_keyboard,
     get_lessons_report_teacher_filter_keyboard,
+    get_promo_discount_type_kb,
 )
 from states import AdminStates
 from shared.database import (
@@ -131,6 +132,12 @@ from shared.database import (
     get_debtor_student_details,
     get_referral_by_invitee_telegram_id,
     link_invitee_student,
+    get_student_max_id,
+    create_promo_code,
+    assign_promo_to_student,
+    list_promo_codes,
+    get_promo_code_by_id,
+    deactivate_promo_code,
 )
 from shared.sheets import get_sheets_client
 from shared.database import (
@@ -138,6 +145,7 @@ from shared.database import (
     get_weekly_payouts,
     get_all_student_balances,
     get_attendance_stats,
+    get_revenue_by_period,
 )
 
 router = Router()
@@ -155,6 +163,7 @@ async def _update_summary_sheets_bg() -> None:
         (get_weekly_payouts,       client.update_payouts_sheet,  "Выплаты"),
         (get_all_student_balances, client.update_balances_sheet, "Балансы"),
         (get_attendance_stats,     client.update_stats_sheet,    "Статистика"),
+        (get_revenue_by_period,    client.update_revenue_sheet,  "Выручка"),
     ]:
         try:
             data = await asyncio.to_thread(fetch_fn)
@@ -221,10 +230,22 @@ def build_payment_prompt_keyboard_clean() -> InlineKeyboardMarkup | None:
     )
 
 
+async def _send_max_notification(max_user_id: int, text: str) -> None:
+    if not MAX_BOT_TOKEN:
+        return
+    try:
+        from shared.max_api import MaxApiClient
+        api = MaxApiClient(MAX_BOT_TOKEN)
+        await api.send_message(max_user_id, text)
+    except Exception as exc:
+        logger.warning("Failed to send MAX notification to user %s: %s", max_user_id, exc)
+
+
 async def notify_student_about_attendance_clean(
     callback: CallbackQuery,
     *,
     student_telegram_id: int | None,
+    student_max_id: int | None = None,
     student_name: str,
     subject_name: str,
     teacher_name: str,
@@ -233,7 +254,7 @@ async def notify_student_about_attendance_clean(
     lesson_balance_before: int,
     lesson_balance_after: int,
 ) -> None:
-    if not student_telegram_id:
+    if not student_telegram_id and not student_max_id:
         return
 
     if status != "present":
@@ -245,7 +266,10 @@ async def notify_student_about_attendance_clean(
             f"Преподаватель: {teacher_name}\n"
             "Статус занятия: не был."
         )
-        await send_student_notification(callback, student_telegram_id, text)
+        if student_telegram_id:
+            await send_student_notification(callback, student_telegram_id, text)
+        if student_max_id:
+            await _send_max_notification(student_max_id, text)
         return
 
     lines = [
@@ -285,12 +309,11 @@ async def notify_student_about_attendance_clean(
         if reply_markup is None:
             reply_markup = build_payment_prompt_keyboard_clean()
 
-    await send_student_notification(
-        callback,
-        student_telegram_id,
-        "\n".join(lines),
-        reply_markup=reply_markup,
-    )
+    text = "\n".join(lines)
+    if student_telegram_id:
+        await send_student_notification(callback, student_telegram_id, text, reply_markup=reply_markup)
+    if student_max_id:
+        await _send_max_notification(student_max_id, text)
 
 
 def format_debt_report_text(report_data: dict, overdue_days: int) -> str:
@@ -2336,6 +2359,23 @@ async def teacher_attendance_choose_student(callback: CallbackQuery):
         await callback.answer()
         return
 
+    if len(directions) == 1:
+        direction_id = directions[0][0]
+        lesson = get_student_lesson_by_id(direction_id)
+        if lesson:
+            _, _, _, subject_name, lesson_balance, tariff_type, student_name, teacher_name = lesson
+            await update_flow_message(
+                callback,
+                f"Ученик: {student_name}\n"
+                f"Предмет: {subject_name}\n"
+                f"Преподаватель: {teacher_name}\n"
+                f"Остаток: {lesson_balance}\n\n"
+                f"Отметьте посещение:",
+                reply_markup=get_attendance_mark_keyboard(direction_id),
+            )
+            await callback.answer()
+            return
+
     await update_flow_message(
         callback,
         "Выберите направление ученика для отметки посещаемости:",
@@ -2507,12 +2547,7 @@ async def mark_student_attendance(callback: CallbackQuery):
 
     _, student_id, _, subject_name, lesson_balance_before, tariff_type, student_name, teacher_name = lesson
 
-    # Answer and remove keyboard immediately to prevent double-tap re-delivery.
     await callback.answer()
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
 
     lesson_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     attendance_id = mark_attendance(direction_id, status, callback.from_user.id)
@@ -2545,10 +2580,12 @@ async def mark_student_attendance(callback: CallbackQuery):
 
     student = get_student_by_id(student_id)
     student_telegram_id = student[2] if student else None
+    student_max_id = get_student_max_id(student_id)
 
     await notify_student_about_attendance_clean(
         callback,
         student_telegram_id=student_telegram_id,
+        student_max_id=student_max_id,
         student_name=student_name,
         subject_name=subject_name,
         teacher_name=teacher_name,
@@ -2586,11 +2623,13 @@ async def mark_student_attendance(callback: CallbackQuery):
         f"<i>Отметка сохранена в истории ✓</i>"
     )
 
-    await callback.message.answer(
-        confirmation_text,
-        parse_mode="HTML",
-        reply_markup=get_admin_reply_menu(callback.from_user.id) if is_admin_role(callback.from_user.id) else get_teacher_menu()
-    )
+    try:
+        await callback.message.edit_text(confirmation_text, parse_mode="HTML", reply_markup=None)
+    except Exception:
+        await callback.message.answer(confirmation_text, parse_mode="HTML")
+
+    reply_kb = get_admin_reply_menu(callback.from_user.id) if is_admin_role(callback.from_user.id) else get_teacher_menu()
+    await callback.message.answer("📋 Меню:", reply_markup=reply_kb)
 
 
 @router.callback_query(lambda c: c.data == "admin_add_balance")
@@ -3083,6 +3122,7 @@ async def _do_sheets_refresh(message) -> None:
         (get_weekly_payouts,       client.update_payouts_sheet,  "Выплаты"),
         (get_all_student_balances, client.update_balances_sheet, "Балансы"),
         (get_attendance_stats,     client.update_stats_sheet,    "Статистика"),
+        (get_revenue_by_period,    client.update_revenue_sheet,  "Выручка"),
     ]:
         try:
             data = await asyncio.to_thread(fetch_fn)
@@ -4784,3 +4824,269 @@ async def student_directions(callback: CallbackQuery):
     )
     await state.set_state(AdminStates.waiting_teacher_selection)
     return
+
+
+# ── Promo codes ───────────────────────────────────────────────────────────────
+
+def _fmt_promo_list(promos: list[dict]) -> str:
+    if not promos:
+        return "Промокодов пока нет."
+    lines = []
+    for p in promos:
+        dtype = "%" if p["discount_type"] == "percent" else "₽"
+        val = int(p["discount_value"]) if p["discount_value"] == int(p["discount_value"]) else p["discount_value"]
+        status = "✅" if p["active"] else "❌"
+        until = f" до {p['valid_until']}" if p["valid_until"] else " (бессрочно)"
+        uses = f" | использован {p['used_count']}/{p['max_uses']}" if p["max_uses"] else f" | использован {p['used_count']} раз"
+        assigned = f" | назначен {p['assigned_count']} уч." if p["assigned_count"] else ""
+        lines.append(f"{status} <code>{p['code']}</code> — {val}{dtype}{until}{uses}{assigned}")
+    return "\n".join(lines)
+
+
+@router.callback_query(lambda c: c.data == "admin_promo_list")
+async def admin_promo_list(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    promos = list_promo_codes()
+    text = f"🎟 <b>Промокоды</b>\n\n{_fmt_promo_list(promos)}"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Создать промокод", callback_data="admin_promo_create")],
+        [InlineKeyboardButton(text="← Назад", callback_data="admin_section_finance")],
+    ])
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "admin_promo_create")
+async def admin_promo_create_start(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text(
+        "🎟 <b>Создание промокода</b>\n\n"
+        "Введите текст промокода (например: <code>SUMMER26</code>).\n"
+        "Используйте латиницу, цифры, дефис — будет преобразован в ВЕРХНИЙ регистр.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Отмена", callback_data="admin_promo_list")
+        ]]),
+    )
+    await state.set_state(AdminStates.waiting_promo_code_text)
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_promo_code_text)
+async def admin_promo_code_text(message: Message, state: FSMContext):
+    code = (message.text or "").strip().upper()
+    if not code or len(code) < 2:
+        await message.answer("Код слишком короткий. Введите минимум 2 символа.")
+        return
+    await state.update_data(promo_code=code)
+    await message.answer(
+        f"Код: <code>{code}</code>\n\nВыберите тип скидки:",
+        parse_mode="HTML",
+        reply_markup=get_promo_discount_type_kb(),
+    )
+
+
+@router.callback_query(lambda c: c.data in ("promo_type_percent", "promo_type_fixed_rub"))
+async def admin_promo_type(callback: CallbackQuery, state: FSMContext):
+    dtype = "percent" if callback.data == "promo_type_percent" else "fixed_rub"
+    await state.update_data(promo_type=dtype)
+    unit = "%" if dtype == "percent" else "₽"
+    await callback.message.edit_text(
+        f"Тип: {'процентная скидка' if dtype == 'percent' else 'фиксированная сумма'}\n\n"
+        f"Введите размер скидки (число, например <code>20</code> {unit}):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Отмена", callback_data="admin_promo_list")
+        ]]),
+    )
+    await state.set_state(AdminStates.waiting_promo_discount_value)
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_promo_discount_value)
+async def admin_promo_discount_value(message: Message, state: FSMContext):
+    try:
+        val = float((message.text or "").strip().replace(",", "."))
+        if val <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("Введите положительное число (например: 20 или 500).")
+        return
+    await state.update_data(promo_value=val)
+    await message.answer(
+        "Введите срок действия промокода — дату и время истечения.\n\n"
+        "Формат: <code>31.12.2026 23:59</code>\n"
+        "Или введите <code>нет</code> — промокод будет бессрочным.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Бессрочный", callback_data="promo_until_none")
+        ]]),
+    )
+    await state.set_state(AdminStates.waiting_promo_valid_until)
+
+
+@router.callback_query(lambda c: c.data == "promo_until_none")
+async def admin_promo_until_none(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(promo_until=None)
+    await callback.message.edit_text(
+        "Срок действия: бессрочно.\n\n"
+        "Введите максимальное количество использований промокода (число),\n"
+        "или нажмите «Без ограничений»:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Без ограничений", callback_data="promo_uses_none")
+        ]]),
+    )
+    await state.set_state(AdminStates.waiting_promo_max_uses)
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_promo_valid_until)
+async def admin_promo_valid_until(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if text.lower() in ("нет", "no", "-"):
+        await state.update_data(promo_until=None)
+        until_display = "бессрочно"
+    else:
+        parsed = None
+        for fmt in ("%d.%m.%Y %H:%M", "%d.%m.%Y", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(text, fmt)
+                parsed = dt.strftime("%Y-%m-%d %H:%M:%S")
+                break
+            except ValueError:
+                continue
+        if not parsed:
+            await message.answer(
+                "Не удалось распознать дату. Используйте формат <code>31.12.2026 23:59</code>\n"
+                "или введите <code>нет</code> для бессрочного.",
+                parse_mode="HTML",
+            )
+            return
+        await state.update_data(promo_until=parsed)
+        until_display = parsed
+    await message.answer(
+        f"Срок действия: {until_display}\n\n"
+        "Введите максимальное количество использований (число),\n"
+        "или нажмите «Без ограничений»:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Без ограничений", callback_data="promo_uses_none")
+        ]]),
+    )
+    await state.set_state(AdminStates.waiting_promo_max_uses)
+
+
+@router.callback_query(lambda c: c.data == "promo_uses_none")
+async def admin_promo_uses_none(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(promo_max_uses=None)
+    await _ask_promo_assign_student(callback.message, state, edit=True)
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_promo_max_uses)
+async def admin_promo_max_uses(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if text.lower() in ("нет", "no", "-"):
+        await state.update_data(promo_max_uses=None)
+    else:
+        try:
+            n = int(text)
+            if n <= 0:
+                raise ValueError
+            await state.update_data(promo_max_uses=n)
+        except ValueError:
+            await message.answer("Введите целое положительное число или «нет».")
+            return
+    await _ask_promo_assign_student(message, state, edit=False)
+
+
+async def _ask_promo_assign_student(msg, state: FSMContext, edit: bool = False):
+    text = (
+        "Введите имя ученика, которому назначить промокод,\n"
+        "или нажмите «Пропустить» (промокод создаётся без назначения):"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Пропустить", callback_data="promo_assign_skip")
+    ]])
+    if edit:
+        await msg.edit_text(text, reply_markup=kb)
+    else:
+        await msg.answer(text, reply_markup=kb)
+    await state.set_state(AdminStates.waiting_promo_assign_student)
+
+
+@router.callback_query(lambda c: c.data == "promo_assign_skip")
+async def admin_promo_assign_skip(callback: CallbackQuery, state: FSMContext):
+    await _finalize_promo(callback.message, state, student_id=None, edit=True)
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_promo_assign_student)
+async def admin_promo_assign_student(message: Message, state: FSMContext):
+    query = (message.text or "").strip()
+    students = find_students_by_name_with_username(query, limit=10)
+    if not students:
+        await message.answer("Ученик не найден. Попробуйте другое имя или нажмите «Пропустить».",
+                             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                                 InlineKeyboardButton(text="Пропустить", callback_data="promo_assign_skip")
+                             ]]))
+        return
+    if len(students) == 1:
+        await _finalize_promo(message, state, student_id=students[0][0], edit=False)
+        return
+    kb_rows = [[InlineKeyboardButton(text=s[1], callback_data=f"promo_pick_student_{s[0]}")] for s in students[:10]]
+    kb_rows.append([InlineKeyboardButton(text="Пропустить", callback_data="promo_assign_skip")])
+    await message.answer("Найдено несколько учеников, выберите:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
+
+
+@router.callback_query(lambda c: c.data.startswith("promo_pick_student_"))
+async def admin_promo_pick_student(callback: CallbackQuery, state: FSMContext):
+    student_id = int(callback.data.split("promo_pick_student_")[1])
+    await _finalize_promo(callback.message, state, student_id=student_id, edit=True)
+    await callback.answer()
+
+
+async def _finalize_promo(msg, state: FSMContext, student_id: int | None, edit: bool):
+    data = await state.get_data()
+    code = data.get("promo_code", "")
+    dtype = data.get("promo_type", "percent")
+    value = float(data.get("promo_value", 0))
+    until = data.get("promo_until")
+    max_uses = data.get("promo_max_uses")
+    await state.clear()
+
+    promo_id = await asyncio.to_thread(create_promo_code, code, dtype, value, until, max_uses)
+    if promo_id is None:
+        text = f"❌ Промокод <code>{code}</code> уже существует."
+        if edit:
+            await msg.edit_text(text, parse_mode="HTML")
+        else:
+            await msg.answer(text, parse_mode="HTML")
+        return
+
+    assigned_name = ""
+    if student_id is not None:
+        student = await asyncio.to_thread(get_student_by_id, student_id)
+        ok = await asyncio.to_thread(assign_promo_to_student, student_id, promo_id)
+        if ok and student:
+            assigned_name = f"\n👤 Назначен ученику: {student[1]}"
+
+    unit = "%" if dtype == "percent" else "₽"
+    val_str = int(value) if value == int(value) else value
+    until_str = f"до {until}" if until else "бессрочно"
+    uses_str = f"макс. {max_uses} использований" if max_uses else "без ограничений"
+
+    text = (
+        f"✅ <b>Промокод создан</b>\n\n"
+        f"Код: <code>{code}</code>\n"
+        f"Скидка: {val_str}{unit}\n"
+        f"Действует: {until_str}\n"
+        f"Использований: {uses_str}"
+        f"{assigned_name}"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="← К списку промокодов", callback_data="admin_promo_list")
+    ]])
+    if edit:
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    else:
+        await msg.answer(text, parse_mode="HTML", reply_markup=kb)

@@ -1,10 +1,11 @@
 from aiogram import Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 import os
 
-from config import ADMIN_ID, PAYMENTS_CHAT_ID, PAYMENT_BANK_NUMBER, PAYMENT_BANK_NAME, PAYMENT_ACCOUNT_HOLDER, PAYMENT_PHOTO_FILE_ID
+from config import ADMIN_ID, LESSON_PRICE, PACKAGE_PRICES, PAYMENTS_CHAT_ID, PAYMENT_BANK_NUMBER, PAYMENT_BANK_NAME, PAYMENT_ACCOUNT_HOLDER, PAYMENT_PHOTO_FILE_ID
 from keyboards import (
+    get_package_selection_keyboard,
     get_payment_check_keyboard,
     get_payment_direction_keyboard,
     get_payment_topup_keyboard,
@@ -14,8 +15,11 @@ from shared.database import (
     award_referral_bonus_to_inviter,
     create_payment_request,
     finalize_payment_with_topup,
+    find_students_by_max_id,
     find_students_by_telegram_id,
     get_active_invitee_discount_percent,
+    get_active_promo_for_user,
+    get_payment_platform_info,
     get_payment_request_by_id,
     get_user_by_telegram_id,
     get_student_directions,
@@ -23,6 +27,10 @@ from shared.database import (
     log_admin_action,
     try_transition_payment_request_status,
 )
+from shared.max_api import MaxApiClient
+
+_MAX_BOT_TOKEN = os.getenv("SCHOOL_MAX_BOT_TOKEN")
+_max_client: MaxApiClient | None = MaxApiClient(_MAX_BOT_TOKEN) if _MAX_BOT_TOKEN else None
 from states import ApplicationForm
 
 from .common import build_payment_caption, show_main_menu
@@ -69,13 +77,82 @@ def _can_manage_payments(callback: CallbackQuery) -> bool:
     return _is_payments_chat(callback.message) and _is_payment_moderator(callback.from_user.id)
 
 
+def _calc_price_block(payment_type: str, promo, debt_lessons: int = 0) -> str:
+    """Return a text block with price calculation, or empty string if unknown."""
+    dtype = dvalue = None
+    if promo:
+        _, _, dtype, dvalue, _ = promo
+        dvalue = float(dvalue)
+
+    if payment_type == "single" and LESSON_PRICE:
+        base = LESSON_PRICE
+        if dtype == "fixed_rub":
+            after = max(0, base - int(dvalue))
+            return f"\n💵 Стоимость: {base}₽\n🎟 Скидка по промокоду: -{int(dvalue)}₽\n✅ <b>К оплате: {after}₽</b>\n"
+        elif dtype == "percent":
+            after = int(base * (1 - dvalue / 100))
+            return f"\n💵 Стоимость: {base}₽\n🎟 Скидка по промокоду: -{int(dvalue)}%\n✅ <b>К оплате: {after}₽</b>\n"
+        else:
+            return f"\n💵 <b>Стоимость: {base}₽</b>\n"
+
+    if payment_type == "package" and debt_lessons > 0:
+        base = debt_lessons  # debt_lessons reused as package_price for packages
+        if dtype == "fixed_rub":
+            after = max(0, base - int(dvalue))
+            return f"\n💵 Стоимость пакета: {base}₽\n🎟 Скидка по промокоду: -{int(dvalue)}₽\n✅ <b>К оплате: {after}₽</b>\n"
+        elif dtype == "percent":
+            after = int(base * (1 - dvalue / 100))
+            return f"\n💵 Стоимость пакета: {base}₽\n🎟 Скидка по промокоду: -{int(dvalue)}%\n✅ <b>К оплате: {after}₽</b>\n"
+        else:
+            return f"\n💵 <b>Стоимость пакета: {base}₽</b>\n"
+
+    if payment_type == "debt" and LESSON_PRICE and debt_lessons > 0:
+        base = LESSON_PRICE * debt_lessons
+        return f"\n💵 <b>Сумма долга: {debt_lessons} × {LESSON_PRICE}₽ = {base}₽</b>\n"
+
+    return ""
+
+
+def _build_payment_details_text(
+    discount_block: str,
+    promo_block: str,
+    price_block: str,
+    payment_type_label: str,
+) -> str:
+    return (
+        f"💰 <b>Тип оплаты:</b> {payment_type_label}\n"
+        f"{price_block}\n"
+        "💳 <b>РЕКВИЗИТЫ ДЛЯ ОПЛАТЫ</b>\n\n"
+        f"🏦 <b>Номер счёта:</b> <code>{PAYMENT_BANK_NUMBER}</code>\n"
+        f"🏢 <b>Банк:</b> {PAYMENT_BANK_NAME}\n"
+        f"👤 <b>Владелец:</b> {PAYMENT_ACCOUNT_HOLDER}\n\n"
+        "<b>📝 В комментарии к переводу укажите:</b>\n"
+        "<code>[ИМЯ УЧЕНИКА]</code>\n"
+        f"{discount_block}{promo_block}\n"
+        "📸 <b>После оплаты отправьте фото, скриншот или PDF-файл чека об оплате.</b>\n\n"
+        "🔙 Если нужно вернуться в меню, нажмите /menu"
+    )
+
+
+def _build_payment_type_kb(has_debt: bool) -> InlineKeyboardMarkup:
+    if has_debt:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💸 Погасить долг", callback_data="pay_debt")],
+            [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✨ Оплатить одно занятие", callback_data="pay_single")],
+        [InlineKeyboardButton(text="📦 Выбрать пакет", callback_data="pay_package")],
+        [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+    ])
+
+
 @router.callback_query(ApplicationForm.menu, lambda c: c.data == "menu_paid")
 async def menu_paid(callback: CallbackQuery, state: FSMContext):
     if not _is_private_chat(callback.message):
         await callback.answer("⚠️ Оплату отправляйте в личном чате с ботом.", show_alert=True)
         return
 
-    # Проверяем, найден ли ученик в системе
     students = find_students_by_telegram_id(callback.from_user.id)
     if not students:
         await callback.answer(
@@ -85,38 +162,176 @@ async def menu_paid(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    # Отправляем фото с ценами
-    if PAYMENT_PHOTO_FILE_ID:
-        await callback.message.answer_photo(
-            photo=PAYMENT_PHOTO_FILE_ID
+    student_id = students[0][0]
+    directions = get_student_directions(student_id)
+    debt_directions = [(d[1], d[2], d[3]) for d in directions if d[3] < 0]
+
+    promo = get_active_promo_for_user(callback.from_user.id)
+    promo_hint = ""
+    if promo and not debt_directions:
+        _, code, dtype, dvalue, _ = promo
+        unit = "%" if dtype == "percent" else "₽"
+        scope = "на оплату 1 занятия" if dtype == "percent" else "на занятия и пакеты" if dtype == "fixed_rub" else ""
+        promo_hint = f"\n\nАктивная скидка: промокод <b>{code}</b> (-{int(float(dvalue))}{unit})"
+        if scope:
+            promo_hint += f" ({scope})"
+
+    if debt_directions:
+        debt_lines = "\n".join(
+            f"• {subj} — {teacher}: долг {abs(bal)} занят{'ие' if abs(bal) == 1 else 'ия' if 2 <= abs(bal) <= 4 else 'ий'}"
+            for teacher, subj, bal in debt_directions
         )
+        text = (
+            "⚠️ <b>У вас есть задолженность по занятиям:</b>\n\n"
+            f"{debt_lines}\n\n"
+            "Для погашения долга переведите нужную сумму и отправьте чек."
+        )
+    else:
+        text = f"Выберите вариант оплаты:{promo_hint}"
+
+    await state.set_state(ApplicationForm.payment_type_choice)
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_build_payment_type_kb(bool(debt_directions)))
+    except Exception:
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=_build_payment_type_kb(bool(debt_directions)))
+    await callback.answer()
+
+
+async def _show_payment_details(
+    callback: CallbackQuery, state: FSMContext,
+    payment_type: str, payment_type_label: str,
+    debt_lessons: int = 0, package_price: int = 0,
+):
+    students = find_students_by_telegram_id(callback.from_user.id)
+    if not students:
+        await callback.answer("❌ Вы не зарегистрированы в системе.", show_alert=True)
+        return
 
     student_id = students[0][0]
     discount_percent = get_active_invitee_discount_percent(student_id)
+    promo = get_active_promo_for_user(callback.from_user.id)
 
     discount_block = ""
     if discount_percent:
         discount_block = (
-            f"\n🎁 <b>У вас активна реферальная скидка {discount_percent}% "
-            "на этот платёж.</b>\n"
-            f"Заплатите на {discount_percent}% меньше указанной в прайсе суммы — "
+            f"\n🎁 <b>У вас активна реферальная скидка {discount_percent}%.</b>\n"
+            f"Заплатите на {discount_percent}% меньше указанной суммы — "
             "скидка сгорает после первой подтверждённой оплаты.\n"
         )
 
-    payment_text = (
-        "💳 <b>РЕКВИЗИТЫ ДЛЯ ОПЛАТЫ</b>\n\n"
-        f"🏦 <b>Номер счёта:</b> <code>{PAYMENT_BANK_NUMBER}</code>\n"
-        f"🏢 <b>Банк:</b> {PAYMENT_BANK_NAME}\n"
-        f"👤 <b>Владелец:</b> {PAYMENT_ACCOUNT_HOLDER}\n\n"
-        "<b>📝 В комментарии к переводу укажите:</b>\n"
-        "<code>[ИМЯ УЧЕНИКА]</code>\n"
-        f"{discount_block}\n"
-        "📸 <b>После оплаты отправьте фото, скриншот или PDF-файл чека об оплате.</b>\n\n"
-        "🔙 Если нужно вернуться в меню, нажмите /menu"
-    )
+    promo_block = ""
+    if promo and payment_type != "debt":
+        _, code, dtype, dvalue, _ = promo
+        unit = "%" if dtype == "percent" else "₽"
+        if payment_type == "single" and LESSON_PRICE:
+            promo_block = f"\n🎟 Применён промокод <b>{code}</b> ({int(float(dvalue))}{unit})\n"
+        elif payment_type == "package" and dtype == "fixed_rub":
+            promo_block = f"\n🎟 Применён промокод <b>{code}</b>: скидка {int(float(dvalue))}{unit}\n"
+        elif payment_type == "package" and dtype == "percent":
+            promo_block = f"\n🎟 Применён промокод <b>{code}</b>: скидка {int(float(dvalue))}{unit}\n"
+        elif dtype == "fixed_rub":
+            promo_block = f"\n🎟 <b>Промокод {code}: скидка {int(float(dvalue))}{unit}</b> применится к этому платежу.\n"
+        else:
+            promo_block = (
+                f"\n🎟 Промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) "
+                "не применяется к пакетам занятий.\n"
+            )
 
-    await callback.message.answer(payment_text, parse_mode="HTML")
+    # For packages, pass package_price via debt_lessons slot
+    price_block = _calc_price_block(payment_type, promo, package_price if payment_type == "package" else debt_lessons)
+
+    payment_text = _build_payment_details_text(discount_block, promo_block, price_block, payment_type_label)
+
+    promo_kb = None
+    if not promo and payment_type != "debt":
+        promo_kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")
+        ]])
+
+    await state.update_data(payment_type=payment_type, payment_type_label=payment_type_label)
     await state.set_state(ApplicationForm.payment_proof)
+
+    try:
+        await callback.message.edit_text(payment_text, parse_mode="HTML", reply_markup=promo_kb)
+    except Exception:
+        await callback.message.answer(payment_text, parse_mode="HTML", reply_markup=promo_kb)
+
+    if PAYMENT_PHOTO_FILE_ID:
+        await callback.message.answer_photo(photo=PAYMENT_PHOTO_FILE_ID)
+
+    await callback.answer()
+
+
+@router.callback_query(ApplicationForm.payment_type_choice, lambda c: c.data == "pay_debt")
+async def pay_debt(callback: CallbackQuery, state: FSMContext):
+    students = find_students_by_telegram_id(callback.from_user.id)
+    debt_lessons = 0
+    if students:
+        directions = get_student_directions(students[0][0])
+        debt_lessons = sum(abs(d[3]) for d in directions if d[3] < 0)
+    await _show_payment_details(callback, state, "debt", "💸 Погашение долга", debt_lessons=debt_lessons)
+
+
+@router.callback_query(ApplicationForm.payment_type_choice, lambda c: c.data == "pay_single")
+async def pay_single(callback: CallbackQuery, state: FSMContext):
+    await _show_payment_details(callback, state, "single", "✨ Разовое занятие")
+
+
+@router.callback_query(ApplicationForm.payment_type_choice, lambda c: c.data == "pay_package")
+async def pay_package(callback: CallbackQuery, state: FSMContext):
+    if not PACKAGE_PRICES:
+        await _show_payment_details(callback, state, "package", "📦 Пакет занятий")
+        return
+
+    promo = get_active_promo_for_user(callback.from_user.id)
+    promo_note = ""
+    if promo:
+        _, code, dtype, dvalue, _ = promo
+        unit = "%" if dtype == "percent" else "₽"
+        promo_note = f"\n🎟 Промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) применяется к пакетам."
+    else:
+        promo_note = ""
+
+    text = f"📦 <b>Выбор пакета</b>{promo_note}\n\nВыберите количество занятий:"
+    kb = get_package_selection_keyboard(PACKAGE_PRICES, promo)
+    await state.set_state(ApplicationForm.package_selection)
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(ApplicationForm.package_selection, lambda c: c.data.startswith("pay_package_"))
+async def select_package(callback: CallbackQuery, state: FSMContext):
+    try:
+        lessons = int(callback.data.split("pay_package_", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка выбора пакета.", show_alert=True)
+        return
+    price = PACKAGE_PRICES.get(lessons)
+    if not price:
+        await callback.answer("Пакет не найден.", show_alert=True)
+        return
+    label = f"📦 Пакет {lessons} занятий"
+    await _show_payment_details(callback, state, "package", label, package_price=price)
+
+
+@router.callback_query(ApplicationForm.package_selection, lambda c: c.data == "pay_back_to_type")
+async def package_back_to_type(callback: CallbackQuery, state: FSMContext):
+    promo = get_active_promo_for_user(callback.from_user.id)
+    promo_hint = ""
+    if promo:
+        _, code, dtype, dvalue, _ = promo
+        unit = "%" if dtype == "percent" else "₽"
+        scope = "на оплату 1 занятия" if dtype == "percent" else "на занятия и пакеты"
+        promo_hint = f"\n\nАктивная скидка: промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) ({scope})"
+    text = f"Выберите вариант оплаты:{promo_hint}"
+    await state.set_state(ApplicationForm.payment_type_choice)
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_build_payment_type_kb(False))
+    except Exception:
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=_build_payment_type_kb(False))
     await callback.answer()
 
 
@@ -160,6 +375,16 @@ async def get_payment_proof(message: Message, state: FSMContext):
     if students_for_discount:
         discount_percent = get_active_invitee_discount_percent(students_for_discount[0][0])
 
+    promo = get_active_promo_for_user(message.from_user.id)
+    promo_label = None
+    if promo:
+        _, code, dtype, dvalue, _ = promo
+        unit = "%" if dtype == "percent" else "₽"
+        promo_label = f"{code} (-{int(dvalue)}{unit})"
+
+    fsm_data = await state.get_data()
+    payment_type_label = fsm_data.get("payment_type_label")
+
     payment_text = build_payment_caption(
         payment_request_id=payment_request_id,
         full_name=message.from_user.full_name,
@@ -168,6 +393,8 @@ async def get_payment_proof(message: Message, state: FSMContext):
         caption_text=caption_text,
         status_text="⏳ Ожидает проверки",
         referral_discount_percent=discount_percent,
+        payment_type_label=payment_type_label,
+        promo_label=promo_label,
     )
 
     if file_type == "pdf":
@@ -275,6 +502,16 @@ async def reject_payment_request(callback: CallbackQuery):
             )
         except Exception:
             pass
+    else:
+        source_platform, max_user_id = get_payment_platform_info(payment_request_id)
+        if source_platform == "max" and max_user_id and _max_client:
+            try:
+                await _max_client.send_message(
+                    max_user_id,
+                    "❌ Ваша оплата отклонена.\n\nПроверьте чек или свяжитесь с администратором.",
+                )
+            except Exception:
+                pass
 
     await callback.answer("❌ Оплата отклонена")
 
@@ -312,11 +549,15 @@ async def approve_payment_request(callback: CallbackQuery):
     if status == "rejected":
         await callback.answer("❌ Эта оплата уже отклонена", show_alert=True)
         return
-    if not telegram_user_id:
-        await callback.answer("❌ У оплаты нет Telegram ID", show_alert=True)
-        return
 
-    students = find_students_by_telegram_id(telegram_user_id)
+    students = find_students_by_telegram_id(telegram_user_id) if telegram_user_id else []
+    if not students:
+        source_platform, max_uid = get_payment_platform_info(payment_request_id)
+        if source_platform == "max" and max_uid:
+            students = find_students_by_max_id(max_uid)
+    if not students and not telegram_user_id:
+        await callback.answer("❌ Ученик не найден (нет TG ID и MAX ID)", show_alert=True)
+        return
     if not students:
         await callback.answer("❌ Ученик не найден по Telegram ID", show_alert=True)
         return
@@ -589,6 +830,19 @@ async def _apply_topup(
             )
         except Exception:
             pass
+    else:
+        source_platform, max_user_id = get_payment_platform_info(payment_request_id)
+        if source_platform == "max" and max_user_id and _max_client:
+            try:
+                await _max_client.send_message(
+                    max_user_id,
+                    f"✅ Ваша оплата подтверждена!\n\n"
+                    f"На баланс начислено {lessons_to_add} занятий.\n"
+                    f"📚 Предмет: {subject_name}\n"
+                    f"👨‍🏫 Преподаватель: {teacher_name}",
+                )
+            except Exception:
+                pass
 
     # Referral post-processing: only fires once per student because
     # attach_first_payment is idempotent (returns False if first_paid_at is

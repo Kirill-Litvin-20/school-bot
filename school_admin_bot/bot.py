@@ -36,6 +36,7 @@ from shared.database import (
     get_weekly_payouts,
     get_all_student_balances,
     get_attendance_stats,
+    get_revenue_by_period,
 )
 from shared.sheets import get_sheets_client
 from shared.health import start_health_server
@@ -319,6 +320,11 @@ async def update_summary_sheets() -> None:
         logger.info("Sheets: Статистика updated")
     except Exception as exc:
         logger.warning("Sheets: Статистика update failed: %s", exc)
+    try:
+        await asyncio.to_thread(client.update_revenue_sheet, get_revenue_by_period())
+        logger.info("Sheets: Выручка updated")
+    except Exception as exc:
+        logger.warning("Sheets: Выручка update failed: %s", exc)
 
 
 async def sheets_summary_worker():
@@ -351,6 +357,7 @@ async def sheets_summary_worker():
                         await asyncio.to_thread(client.update_balances_sheet, balances)
                         stats = await asyncio.to_thread(get_attendance_stats)
                         await asyncio.to_thread(client.update_stats_sheet, stats)
+                        await asyncio.to_thread(client.update_revenue_sheet, get_revenue_by_period())
                 except Exception as exc:
                     logger.warning("Sheets daily update failed: %s", exc)
                 last_daily_update = today_str

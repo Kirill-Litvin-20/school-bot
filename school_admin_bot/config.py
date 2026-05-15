@@ -59,3 +59,4 @@ SUPERADMINS = _parse_int_list(_require("SCHOOL_ADMIN_SUPERADMINS"))
 SCHOOL_BOT_TOKEN = os.getenv("SCHOOL_BOT_TOKEN", "").strip() or None
 SCHOOL_BOT_USERNAME = os.getenv("SCHOOL_BOT_USERNAME", "").strip().lstrip("@") or None
 SCHOOL_BOT_PAYMENTS_CHAT_ID = _parse_optional_int("SCHOOL_BOT_PAYMENTS_CHAT_ID")
+MAX_BOT_TOKEN = os.getenv("SCHOOL_MAX_BOT_TOKEN", "").strip() or None
