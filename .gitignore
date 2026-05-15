@@ -25,3 +25,5 @@ Thumbs.db
 Desktop.ini
 *service_account*.json
 *google*key*.json
+.DS_Store
+.claude/worktrees/
