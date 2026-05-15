@@ -419,70 +419,88 @@ async def get_photo_id(message: Message):
 async def show_referral_code(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     referral_link = f"https://t.me/integral_school_ru_bot?start=ref_{telegram_id}"
-
-    await callback.message.answer(
+    text = (
         "🎁 <b>ВАШ РЕФЕРАЛЬНЫЙ КОД</b>\n\n"
-        "Отправьте эту ссылку друзьям:\n\n"
         f"<a href=\"{referral_link}\">{referral_link}</a>\n\n"
-        "<b>Как это работает:</b>\n"
-        "1️⃣ Друг переходит по вашей ссылке и оставляет заявку.\n"
-        "2️⃣ Проходит бесплатную диагностику.\n"
-        "3️⃣ Оплачивает первое платное занятие со <b>скидкой 20%</b>.\n"
-        "4️⃣ После подтверждения этой оплаты вам автоматически "
-        "начисляется <b>+1 бесплатное занятие</b>.\n\n"
-        "Бонус будет списан с ближайшего проведённого занятия.",
-        parse_mode="HTML",
+        "Друг переходит → диагностика → первая оплата со <b>скидкой 20%</b> → вам <b>+1 занятие</b>."
     )
+    try:
+        await callback.message.edit_text(
+            text, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+            ]),
+        )
+    except Exception:
+        await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
 
 
+def _offers_back_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Оставить заявку", callback_data="menu_signup")],
+        [InlineKeyboardButton(text="← Назад", callback_data="menu_offers")],
+    ])
+
+
 @router.callback_query(lambda c: c.data == "menu_offers")
-async def show_offers(callback: CallbackQuery):
-    """Показать меню с акциями"""
-    text = (
-        "🎁 <b>СПЕЦИАЛЬНЫЕ ПРЕДЛОЖЕНИЯ</b>\n\n"
-        "Мы дарим отличные возможности для новых учеников:\n"
-    )
-    await callback.message.edit_text(text, reply_markup=get_offers_menu_keyboard(), parse_mode="HTML")
+async def show_offers(callback: CallbackQuery, state: FSMContext):
+    text = "🎁 <b>СПЕЦИАЛЬНЫЕ ПРЕДЛОЖЕНИЯ</b>\n\nВыберите интересующее предложение:"
+    try:
+        await callback.message.edit_text(text, reply_markup=get_offers_menu_keyboard(), parse_mode="HTML")
+    except Exception:
+        await callback.message.answer(text, reply_markup=get_offers_menu_keyboard(), parse_mode="HTML")
     await callback.answer()
 
 
 @router.callback_query(lambda c: c.data == "offer_free_diagnosis")
 async def show_free_diagnosis(callback: CallbackQuery):
-    """Показать информацию о бесплатной диагностике"""
     text = (
         "🎁 <b>БЕСПЛАТНАЯ ДИАГНОСТИКА</b>\n\n"
-        "Мы предлагаем новым ученикам совершенно <b>бесплатное первое занятие</b> - диагностику!\n\n"
-        "<b>Что это такое?</b>\n"
-        "✅ Определим ваш уровень знаний\n"
-        "✅ Поймём ваши цели и задачи\n"
+        "Первое занятие для новых учеников — <b>бесплатно</b>!\n\n"
+        "✅ Определим уровень знаний\n"
         "✅ Подберём оптимальный план обучения\n"
         "✅ Ответим на все вопросы\n\n"
-        "<b>Как это работает?</b>\n"
-        "1. Вы оставляете заявку\n"
-        "2. Мы свяжемся с вами\n"
-        "3. Проводим диагностическое занятие\n"
-        "4. Обсуждаем результаты и план\n\n"
-        "<i>Скидка доступна только один раз для новых учеников!</i>"
+        "Оставьте заявку — мы свяжемся с вами."
     )
-    await callback.message.edit_text(text, reply_markup=get_offer_application_keyboard("free_diagnosis"), parse_mode="HTML")
+    try:
+        await callback.message.edit_text(text, reply_markup=_offers_back_kb(), parse_mode="HTML")
+    except Exception:
+        await callback.message.answer(text, reply_markup=_offers_back_kb(), parse_mode="HTML")
     await callback.answer()
 
 
 @router.callback_query(lambda c: c.data == "offer_first_package")
 async def show_first_package(callback: CallbackQuery):
-    """Показать информацию о скидке на первый пакет"""
     text = (
         "💰 <b>СКИДКА НА ПЕРВЫЙ ПАКЕТ</b>\n\n"
-        "Получите выгодную скидку при оформлении <b>первого пакета занятий</b>!\n\n"
-        "Мы верим в качество и хотим, чтобы вы попробовали обучение с лучшей стороны.\n\n"
-        "<b>Условия:</b>\n"
-        "✅ Скидка применяется только на первый пакет\n"
-        "✅ Действует для всех новых учеников\n"
+        "Выгодная скидка при оформлении первого пакета занятий для новых учеников.\n\n"
+        "✅ Только первый пакет\n"
         "✅ Размер скидки уточняется при оформлении\n\n"
-        "<i>Не пропустите эту выгодную предложение!</i>"
+        "Оставьте заявку — мы свяжемся с вами."
     )
-    await callback.message.edit_text(text, reply_markup=get_offer_application_keyboard("first_package"), parse_mode="HTML")
+    try:
+        await callback.message.edit_text(text, reply_markup=_offers_back_kb(), parse_mode="HTML")
+    except Exception:
+        await callback.message.answer(text, reply_markup=_offers_back_kb(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("apply_offer_"))
+async def apply_offer(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(ApplicationForm.menu)
+    # Redirect to signup flow via menu_signup
+    await state.set_state(ApplicationForm.user_type)
+    try:
+        await callback.message.edit_text(
+            "👤 Кто оставляет заявку?\n\nНапишите: <b>ученик</b> или <b>родитель</b>.",
+            parse_mode="HTML",
+        )
+    except Exception:
+        await callback.message.answer(
+            "👤 Кто оставляет заявку?\n\nНапишите: <b>ученик</b> или <b>родитель</b>.",
+            parse_mode="HTML",
+        )
     await callback.answer()
 
 
@@ -788,14 +806,12 @@ async def show_referral_program(callback: CallbackQuery):
         "Скопируйте ссылку и отправьте другу.\n\n"
         "Уведомление о начисленном бонусе придёт автоматически в этот чат."
     )
-    await callback.message.edit_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="🎁 Открыть мой реферальный код", callback_data="show_referral_code")],
-                [InlineKeyboardButton(text="← Назад", callback_data="menu_offers")],
-            ]
-        ),
-        parse_mode="HTML",
-    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎁 Мой реферальный код", callback_data="show_referral_code")],
+        [InlineKeyboardButton(text="← Назад", callback_data="menu_offers")],
+    ])
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
