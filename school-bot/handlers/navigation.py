@@ -212,6 +212,10 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
             reply_markup=get_main_menu_keyboard(),
         )
     except Exception:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
         await callback.message.answer(
             "📋 Пожалуйста, выберите нужный раздел:",
             reply_markup=get_main_menu_keyboard(),
@@ -642,22 +646,18 @@ async def enter_promo_start(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     await state.set_state(ApplicationForm.entering_promo_code)
+    promo_prompt_text = "🎟 <b>Введите промокод</b>\n\nНапишите код в следующем сообщении:"
+    promo_prompt_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")
+    ]])
     try:
-        await callback.message.edit_text(
-            "🎟 <b>Введите промокод</b>\n\nНапишите код в следующем сообщении:",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")
-            ]]),
-        )
+        await callback.message.edit_text(promo_prompt_text, parse_mode="HTML", reply_markup=promo_prompt_kb)
     except Exception:
-        await callback.message.answer(
-            "🎟 <b>Введите промокод</b>\n\nНапишите код в следующем сообщении:",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")
-            ]]),
-        )
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.message.answer(promo_prompt_text, parse_mode="HTML", reply_markup=promo_prompt_kb)
     await callback.answer()
 
 

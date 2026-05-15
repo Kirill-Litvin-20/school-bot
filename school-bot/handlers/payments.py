@@ -129,8 +129,7 @@ def _build_payment_details_text(
         "<b>📝 В комментарии к переводу укажите:</b>\n"
         "<code>[ИМЯ УЧЕНИКА]</code>\n"
         f"{discount_block}{promo_block}\n"
-        "📸 <b>После оплаты отправьте фото, скриншот или PDF-файл чека об оплате.</b>\n\n"
-        "🔙 Если нужно вернуться в меню, нажмите /menu"
+        "📸 <b>После оплаты отправьте фото, скриншот или PDF-файл чека.</b>"
     )
 
 
@@ -242,24 +241,37 @@ async def _show_payment_details(
 
     payment_text = _build_payment_details_text(discount_block, promo_block, price_block, payment_type_label)
 
-    promo_kb = None
+    detail_buttons = []
     if not promo and payment_type != "debt":
-        promo_kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")
-        ]])
+        detail_buttons.append([InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")])
+    detail_buttons.append([InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")])
+    detail_kb = InlineKeyboardMarkup(inline_keyboard=detail_buttons)
 
     await state.update_data(payment_type=payment_type, payment_type_label=payment_type_label)
     await state.set_state(ApplicationForm.payment_proof)
-
-    try:
-        await callback.message.edit_text(payment_text, parse_mode="HTML", reply_markup=promo_kb)
-    except Exception:
-        await callback.message.answer(payment_text, parse_mode="HTML", reply_markup=promo_kb)
+    await callback.answer()
 
     if PAYMENT_PHOTO_FILE_ID:
-        await callback.message.answer_photo(photo=PAYMENT_PHOTO_FILE_ID)
-
-    await callback.answer()
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        try:
+            await callback.message.answer_photo(
+                photo=PAYMENT_PHOTO_FILE_ID,
+                caption=payment_text,
+                parse_mode="HTML",
+                reply_markup=detail_kb,
+            )
+        except Exception:
+            # Caption too long — send photo then text separately
+            await callback.message.answer_photo(photo=PAYMENT_PHOTO_FILE_ID)
+            await callback.message.answer(payment_text, parse_mode="HTML", reply_markup=detail_kb)
+    else:
+        try:
+            await callback.message.edit_text(payment_text, parse_mode="HTML", reply_markup=detail_kb)
+        except Exception:
+            await callback.message.answer(payment_text, parse_mode="HTML", reply_markup=detail_kb)
 
 
 @router.callback_query(ApplicationForm.payment_type_choice, lambda c: c.data == "pay_debt")
