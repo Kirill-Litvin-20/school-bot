@@ -453,16 +453,13 @@ async def _process_payment_file(
             file_type=file_type,
         )
 
+        username_line = f"🔗 Username: @{username}" if username else "🔗 Username: не указан"
         payment_caption = (
             f"💳 Оплата #{payment_request_id}\n\n"
             f"📌 Статус: ⏳ Ожидает проверки\n"
             f"📱 Платформа: MAX\n"
             f"👤 Имя: {name}\n"
-            f"🔗 Username: @{username}" if username else f"💳 Оплата #{payment_request_id}\n\n"
-            f"📌 Статус: ⏳ Ожидает проверки\n"
-            f"📱 Платформа: MAX\n"
-            f"👤 Имя: {name}\n"
-            f"🔗 Username: не указан"
+            + username_line
         )
 
         from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
