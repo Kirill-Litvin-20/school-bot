@@ -14,8 +14,10 @@ from shared.database import (
     award_referral_bonus_to_inviter,
     create_payment_request,
     finalize_payment_with_topup,
+    find_students_by_max_id,
     find_students_by_telegram_id,
     get_active_invitee_discount_percent,
+    get_payment_platform_info,
     get_payment_request_by_id,
     get_user_by_telegram_id,
     get_student_directions,
@@ -23,6 +25,10 @@ from shared.database import (
     log_admin_action,
     try_transition_payment_request_status,
 )
+from shared.max_api import MaxApiClient
+
+_MAX_BOT_TOKEN = os.getenv("SCHOOL_MAX_BOT_TOKEN")
+_max_client: MaxApiClient | None = MaxApiClient(_MAX_BOT_TOKEN) if _MAX_BOT_TOKEN else None
 from states import ApplicationForm
 
 from .common import build_payment_caption, show_main_menu
@@ -275,6 +281,16 @@ async def reject_payment_request(callback: CallbackQuery):
             )
         except Exception:
             pass
+    else:
+        source_platform, max_user_id = get_payment_platform_info(payment_request_id)
+        if source_platform == "max" and max_user_id and _max_client:
+            try:
+                await _max_client.send_message(
+                    max_user_id,
+                    "❌ Ваша оплата отклонена.\n\nПроверьте чек или свяжитесь с администратором.",
+                )
+            except Exception:
+                pass
 
     await callback.answer("❌ Оплата отклонена")
 
@@ -312,11 +328,15 @@ async def approve_payment_request(callback: CallbackQuery):
     if status == "rejected":
         await callback.answer("❌ Эта оплата уже отклонена", show_alert=True)
         return
-    if not telegram_user_id:
-        await callback.answer("❌ У оплаты нет Telegram ID", show_alert=True)
-        return
 
-    students = find_students_by_telegram_id(telegram_user_id)
+    students = find_students_by_telegram_id(telegram_user_id) if telegram_user_id else []
+    if not students:
+        source_platform, max_uid = get_payment_platform_info(payment_request_id)
+        if source_platform == "max" and max_uid:
+            students = find_students_by_max_id(max_uid)
+    if not students and not telegram_user_id:
+        await callback.answer("❌ Ученик не найден (нет TG ID и MAX ID)", show_alert=True)
+        return
     if not students:
         await callback.answer("❌ Ученик не найден по Telegram ID", show_alert=True)
         return
@@ -589,6 +609,19 @@ async def _apply_topup(
             )
         except Exception:
             pass
+    else:
+        source_platform, max_user_id = get_payment_platform_info(payment_request_id)
+        if source_platform == "max" and max_user_id and _max_client:
+            try:
+                await _max_client.send_message(
+                    max_user_id,
+                    f"✅ Ваша оплата подтверждена!\n\n"
+                    f"На баланс начислено {lessons_to_add} занятий.\n"
+                    f"📚 Предмет: {subject_name}\n"
+                    f"👨‍🏫 Преподаватель: {teacher_name}",
+                )
+            except Exception:
+                pass
 
     # Referral post-processing: only fires once per student because
     # attach_first_payment is idempotent (returns False if first_paid_at is

@@ -352,6 +352,7 @@ def init_db():
         updated_at TEXT
     )
     """)
+    _ensure_payment_requests_columns(cur)
 
     cur.execute(
         """
@@ -511,6 +512,28 @@ def init_db():
         """
     )
 
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS max_fsm_state (
+            max_user_id INTEGER PRIMARY KEY,
+            state TEXT,
+            data TEXT
+        )
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS account_link_codes (
+            code TEXT PRIMARY KEY,
+            telegram_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            used INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+
     _ensure_postgres_bigint_columns(cur)
     _cleanup_teacher_profiles_for_non_teacher_users(cur)
     conn.commit()
@@ -592,6 +615,10 @@ def _ensure_students_table_columns(cur: sqlite3.Cursor):
         cur.execute("ALTER TABLE students ADD COLUMN first_paid_at TEXT")
     if "first_paid_payment_id" not in existing_columns:
         cur.execute("ALTER TABLE students ADD COLUMN first_paid_payment_id INTEGER")
+    if "max_id" not in existing_columns:
+        cur.execute("ALTER TABLE students ADD COLUMN max_id INTEGER")
+    if "max_username" not in existing_columns:
+        cur.execute("ALTER TABLE students ADD COLUMN max_username TEXT")
 
 
 def _ensure_users_table_columns(cur: sqlite3.Cursor):
@@ -601,6 +628,19 @@ def _ensure_users_table_columns(cur: sqlite3.Cursor):
         cur.execute("ALTER TABLE users ADD COLUMN telegram_username TEXT")
     if "is_visible_to_students" not in existing_columns:
         cur.execute("ALTER TABLE users ADD COLUMN is_visible_to_students INTEGER NOT NULL DEFAULT 1")
+    if "max_id" not in existing_columns:
+        cur.execute("ALTER TABLE users ADD COLUMN max_id INTEGER")
+
+
+def _ensure_payment_requests_columns(cur: sqlite3.Cursor):
+    cur.execute("PRAGMA table_info(payment_requests)")
+    existing_columns = {row[1] for row in cur.fetchall()}
+    if "source_platform" not in existing_columns:
+        cur.execute(
+            "ALTER TABLE payment_requests ADD COLUMN source_platform TEXT NOT NULL DEFAULT 'telegram'"
+        )
+    if "max_user_id" not in existing_columns:
+        cur.execute("ALTER TABLE payment_requests ADD COLUMN max_user_id INTEGER")
 
 
 def _ensure_postgres_bigint_columns(cur):
@@ -608,18 +648,20 @@ def _ensure_postgres_bigint_columns(cur):
         return
 
     bigint_columns: dict[str, set[str]] = {
-        "students": {"telegram_id", "referred_by_telegram_id"},
-        "users": {"telegram_id"},
+        "students": {"telegram_id", "referred_by_telegram_id", "max_id"},
+        "users": {"telegram_id", "max_id"},
         "teachers": {"telegram_id"},
         "attendance": {"marked_by"},
         "balance_history": {"created_by"},
-        "payment_requests": {"telegram_user_id", "approved_by", "rejected_by"},
+        "payment_requests": {"telegram_user_id", "approved_by", "rejected_by", "max_user_id"},
         "admin_actions": {"admin_telegram_id"},
         "known_telegram_users": {"telegram_id"},
         "onboarding_invites": {"created_by", "used_by_telegram_id"},
         "publication_posts": {"created_by"},
         "review_cards": {"created_by"},
         "referrals": {"inviter_telegram_id", "invitee_telegram_id"},
+        "account_link_codes": {"telegram_id"},
+        "max_fsm_state": {"max_user_id"},
     }
 
     cur.execute(
@@ -4904,3 +4946,227 @@ def get_attendance_stats() -> dict:
         "monthly_history": monthly_history,
         "updated_at":     datetime.now().strftime("%d.%m.%Y %H:%M"),
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MAX messenger helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+def find_students_by_max_id(max_user_id: int) -> list[tuple]:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, full_name, telegram_id, phone FROM students WHERE max_id = ? ORDER BY id DESC",
+        (max_user_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def link_max_to_student(student_id: int, max_id: int, max_username: str | None = None) -> bool:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE students SET max_id = ?, max_username = COALESCE(?, max_username) WHERE id = ?",
+        (max_id, max_username, student_id),
+    )
+    changed = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def try_auto_link_max_by_phone(phone: str, max_id: int, max_username: str | None = None):
+    """Match a MAX user to a student by last-10-digits of phone number.
+
+    Returns the matched student row (id, full_name, telegram_id, phone) or None.
+    Only links if the student has no max_id yet (or the same max_id).
+    """
+    cleaned_query = re.sub(r"[^\d]", "", phone or "")
+    if len(cleaned_query) < 7:
+        return None
+    key = cleaned_query[-10:]
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, full_name, telegram_id, phone, max_id FROM students WHERE phone IS NOT NULL AND phone != ''"
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    for student_id, full_name, telegram_id, student_phone, student_max_id in rows:
+        if not student_phone:
+            continue
+        cleaned_stored = re.sub(r"[^\d]", "", student_phone)
+        if len(cleaned_stored) < 7:
+            continue
+        if cleaned_stored[-10:] != key:
+            continue
+        if student_max_id and student_max_id != max_id:
+            return None
+        link_max_to_student(student_id, max_id, max_username)
+        return (student_id, full_name, telegram_id, student_phone)
+    return None
+
+
+def create_account_link_code(telegram_id: int) -> str:
+    """Generate a 6-character code for linking a TG account to MAX. TTL = 15 min."""
+    code = secrets.token_hex(3).upper()
+    now = datetime.now()
+    expires = (now + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM account_link_codes WHERE telegram_id = ?", (telegram_id,))
+    cur.execute(
+        "INSERT INTO account_link_codes (code, telegram_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+        (code, telegram_id, now.strftime("%Y-%m-%d %H:%M:%S"), expires),
+    )
+    conn.commit()
+    conn.close()
+    return code
+
+
+def consume_account_link_code(code: str) -> int | None:
+    """Validate and consume a link code. Returns telegram_id on success, None otherwise."""
+    code = code.strip().upper()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT telegram_id FROM account_link_codes WHERE code = ? AND expires_at > ? AND used = 0",
+        (code, now),
+    )
+    row = cur.fetchone()
+    if row:
+        cur.execute("UPDATE account_link_codes SET used = 1 WHERE code = ?", (code,))
+        conn.commit()
+    conn.close()
+    return row[0] if row else None
+
+
+def get_max_fsm_state(max_user_id: int) -> tuple[str | None, dict]:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT state, data FROM max_fsm_state WHERE max_user_id = ?",
+        (max_user_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None, {}
+    state, data_json = row
+    try:
+        data = json.loads(data_json) if data_json else {}
+    except Exception:
+        data = {}
+    return state, data
+
+
+def set_max_fsm_state(max_user_id: int, state: str, data: dict | None = None) -> None:
+    data_json = json.dumps(data or {}, ensure_ascii=False)
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO max_fsm_state (max_user_id, state, data)
+        VALUES (?, ?, ?)
+        ON CONFLICT(max_user_id) DO UPDATE SET state = excluded.state, data = excluded.data
+        """,
+        (max_user_id, state, data_json),
+    )
+    conn.commit()
+    conn.close()
+
+
+def clear_max_fsm_state(max_user_id: int) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM max_fsm_state WHERE max_user_id = ?", (max_user_id,))
+    conn.commit()
+    conn.close()
+
+
+def create_payment_request_max(
+    max_user_id: int,
+    max_username: str | None,
+    max_full_name: str | None,
+    caption_text: str | None,
+    file_id: str,
+    file_type: str,
+) -> int:
+    """Create a payment request originating from MAX messenger."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    display_name = f"📱[MAX] {max_full_name}" if max_full_name else "📱[MAX]"
+    display_username = f"@{max_username}" if max_username else None
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO payment_requests (
+            telegram_user_id, telegram_username, telegram_full_name,
+            caption_text, file_id, file_type, status,
+            source_platform, max_user_id, created_at, updated_at
+        )
+        VALUES (NULL, ?, ?, ?, ?, ?, 'pending', 'max', ?, ?, ?)
+        """,
+        (
+            display_username,
+            display_name,
+            caption_text,
+            file_id,
+            file_type,
+            max_user_id,
+            now,
+            now,
+        ),
+    )
+    payment_request_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return payment_request_id
+
+
+def get_payment_platform_info(payment_request_id: int) -> tuple[str, int | None]:
+    """Return (source_platform, max_user_id) for the given payment request."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT COALESCE(source_platform, 'telegram'), max_user_id FROM payment_requests WHERE id = ?",
+        (payment_request_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return "telegram", None
+    return row[0], row[1]
+
+
+def get_recent_payment_history_by_max_user(max_user_id: int, limit: int = 4) -> list[tuple]:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            pr.id, pr.status, pr.caption_text, pr.created_at, pr.updated_at,
+            COALESCE(
+                (
+                    SELECT SUM(bh.lessons_delta)
+                    FROM balance_history bh
+                    WHERE bh.operation_type = 'manual_topup'
+                      AND COALESCE(bh.comment, '') LIKE '%#' || CAST(pr.id AS TEXT) || '%'
+                ),
+                0
+            ) AS lessons_added
+        FROM payment_requests pr
+        WHERE pr.max_user_id = ? AND pr.source_platform = 'max'
+        ORDER BY pr.id DESC
+        LIMIT ?
+        """,
+        (max_user_id, limit),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows

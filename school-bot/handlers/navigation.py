@@ -22,6 +22,8 @@ from shared.database import (
     bind_student_telegram_by_id,
     bind_teacher_telegram_by_id,
     capture_referral,
+    create_account_link_code,
+    find_students_by_max_id,
     find_students_by_telegram_id,
     get_latest_student_by_username,
     get_onboarding_invite_by_token,
@@ -580,6 +582,43 @@ async def faq_link(callback: CallbackQuery):
     )
     await callback.message.edit_text(text, reply_markup=get_faq_back_keyboard(), parse_mode="HTML")
     await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "link_max_start")
+async def link_max_start(callback: CallbackQuery):
+    telegram_id = callback.from_user.id
+
+    # Check if already linked to a MAX account via any student card
+    students = find_students_by_telegram_id(telegram_id)
+    already_linked = any(s[0] and _student_has_max(s[0]) for s in students)
+    if already_linked:
+        await callback.message.answer(
+            "✅ Ваш MAX-аккаунт уже подключён к этому кабинету.\n"
+            "Если нужно привязать другой — обратитесь к администратору."
+        )
+        await callback.answer()
+        return
+
+    code = create_account_link_code(telegram_id)
+    await callback.message.answer(
+        "🔗 <b>Подключение MAX</b>\n\n"
+        "Откройте бот школы в MAX-мессенджере и введите команду:\n\n"
+        f"<code>/link {code}</code>\n\n"
+        f"Код действует <b>15 минут</b>.\n\n"
+        "Бот в MAX: @school_integral_max_bot",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+def _student_has_max(student_id: int) -> bool:
+    from shared.database import get_connection
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT max_id FROM students WHERE id = ?", (student_id,))
+    row = cur.fetchone()
+    conn.close()
+    return bool(row and row[0])
 
 
 @router.callback_query(lambda c: c.data == "offer_referral_program")

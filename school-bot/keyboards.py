@@ -339,6 +339,7 @@ def get_cabinet_keyboard():
             [InlineKeyboardButton(text="💳 Оплатить занятия", callback_data="menu_paid")],
             [InlineKeyboardButton(text="✉️ Написать администратору", url="https://t.me/integral_school_ru")],
             [InlineKeyboardButton(text="🎁 Мой реферальный код", callback_data="show_referral_code")],
+            [InlineKeyboardButton(text="🔗 Подключить MAX", callback_data="link_max_start")],
             [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
         ]
     )
