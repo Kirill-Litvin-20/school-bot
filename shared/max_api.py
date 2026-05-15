@@ -41,28 +41,28 @@ def keyboard(*rows: list[dict]) -> list[dict]:
 class MaxApiClient:
     def __init__(self, token: str) -> None:
         self._token = token
-        self._params = {"access_token": token}
+        self._headers = {"Authorization": token}
 
     # ── low-level ──────────────────────────────────────────────────────────
 
     async def _get(self, path: str, **params) -> dict:
         url = f"{_BASE}{path}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params={**self._params, **params}) as resp:
+        async with aiohttp.ClientSession(headers=self._headers) as session:
+            async with session.get(url, params=params or None) as resp:
                 resp.raise_for_status()
                 return await resp.json()
 
     async def _post(self, path: str, body: dict, **params) -> dict:
         url = f"{_BASE}{path}"
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=body, params={**self._params, **params}) as resp:
+        async with aiohttp.ClientSession(headers=self._headers) as session:
+            async with session.post(url, json=body, params=params or None) as resp:
                 resp.raise_for_status()
                 return await resp.json()
 
     async def _patch(self, path: str, body: dict, **params) -> dict:
         url = f"{_BASE}{path}"
-        async with aiohttp.ClientSession() as session:
-            async with session.patch(url, json=body, params={**self._params, **params}) as resp:
+        async with aiohttp.ClientSession(headers=self._headers) as session:
+            async with session.patch(url, json=body, params=params or None) as resp:
                 resp.raise_for_status()
                 return await resp.json()
 
@@ -111,8 +111,8 @@ class MaxApiClient:
     # ── file download ───────────────────────────────────────────────────────
 
     async def download_bytes(self, url: str) -> bytes:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=self._params) as resp:
+        async with aiohttp.ClientSession(headers=self._headers) as session:
+            async with session.get(url) as resp:
                 resp.raise_for_status()
                 return await resp.read()
 
