@@ -19,12 +19,14 @@ from keyboards import (
 from shared.database import get_teacher_catalog_subjects
 from shared.database import (
     add_user,
+    apply_promo_code_for_student,
     bind_student_telegram_by_id,
     bind_teacher_telegram_by_id,
     capture_referral,
     create_account_link_code,
     find_students_by_max_id,
     find_students_by_telegram_id,
+    get_active_promo_for_user,
     get_latest_student_by_username,
     get_onboarding_invite_by_token,
     get_recent_payment_history_by_telegram_user,
@@ -211,15 +213,18 @@ async def no_teachers_available(callback: CallbackQuery):
 async def menu_teachers(callback: CallbackQuery, state: FSMContext):
     subjects = get_teacher_catalog_subjects()
     if not subjects:
-        await callback.message.answer(
-            "Список преподавателей пока пуст. Пожалуйста, обратитесь к администратору."
-        )
-        await callback.answer()
+        await callback.answer("Список преподавателей пока пуст.", show_alert=True)
         return
-    await callback.message.answer(
-        "Пожалуйста, выберите предмет:",
-        reply_markup=get_teacher_subject_keyboard(subjects),
-    )
+    try:
+        await callback.message.edit_text(
+            "Пожалуйста, выберите предмет:",
+            reply_markup=get_teacher_subject_keyboard(subjects),
+        )
+    except Exception:
+        await callback.message.answer(
+            "Пожалуйста, выберите предмет:",
+            reply_markup=get_teacher_subject_keyboard(subjects),
+        )
     await state.set_state(ApplicationForm.teacher_subject)
     await callback.answer()
 
@@ -331,10 +336,20 @@ async def navigate_teacher_cards(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(ApplicationForm.teacher_card, lambda c: c.data == "teacher_back_to_subjects")
 async def teacher_back_to_subjects(callback: CallbackQuery, state: FSMContext):
     subjects = get_teacher_catalog_subjects()
-    await callback.message.answer(
-        "Пожалуйста, выберите предмет:",
-        reply_markup=get_teacher_subject_keyboard(subjects),
-    )
+    try:
+        await callback.message.edit_text(
+            "Пожалуйста, выберите предмет:",
+            reply_markup=get_teacher_subject_keyboard(subjects),
+        )
+    except Exception:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.message.answer(
+            "Пожалуйста, выберите предмет:",
+            reply_markup=get_teacher_subject_keyboard(subjects),
+        )
     await state.set_state(ApplicationForm.teacher_subject)
     await callback.answer()
 
@@ -537,6 +552,104 @@ async def faq_reschedule(callback: CallbackQuery):
     )
     await callback.message.edit_text(text, reply_markup=get_faq_back_keyboard(), parse_mode="HTML")
     await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "faq_promo")
+async def faq_promo(callback: CallbackQuery):
+    text = (
+        "🎟 <b>ПРОМОКОДЫ</b>\n\n"
+        "В школе «Интеграл» действуют два вида промокодов:\n\n"
+        "<b>1. Скидка в рублях (₽)</b>\n"
+        "Фиксированная сумма, вычитаемая из стоимости.\n"
+        "✅ Применяется <b>ко всем типам оплаты</b>: разовые занятия и пакеты.\n\n"
+        "<b>2. Процентная скидка (%)</b>\n"
+        "Снижает стоимость занятия на указанный процент.\n"
+        "❗ Действует <b>только для разовых занятий</b> — к пакетам не применяется.\n\n"
+        "⏰ <b>Срок действия:</b> у промокода может быть указан срок — дата и время истечения. "
+        "После этого момента промокод перестаёт работать.\n\n"
+        "Промокод активируется автоматически при оплате — "
+        "вы увидите его статус при переходе к оплате.\n\n"
+        "💡 Если промокод не подходит к выбранному формату — бот сообщит об этом."
+    )
+    await callback.message.edit_text(text, reply_markup=get_faq_back_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "enter_promo")
+async def enter_promo_start(callback: CallbackQuery, state: FSMContext):
+    students = find_students_by_telegram_id(callback.from_user.id)
+    if not students:
+        await callback.message.answer(
+            "❌ Вы не найдены в базе учеников. Обратитесь к администратору."
+        )
+        await callback.answer()
+        return
+    promo = get_active_promo_for_user(callback.from_user.id)
+    if promo:
+        _, code, dtype, dvalue, _ = promo
+        unit = "%" if dtype == "percent" else "₽"
+        await callback.message.answer(
+            f"✅ У вас уже активен промокод <b>{code}</b> (скидка {int(dvalue)}{unit}).\n\n"
+            "Для замены промокода обратитесь к администратору.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")
+            ]]),
+        )
+        await callback.answer()
+        return
+    await state.set_state(ApplicationForm.entering_promo_code)
+    await callback.message.answer(
+        "🎟 <b>Введите промокод</b>\n\nНапишите код в следующем сообщении:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")
+        ]]),
+    )
+    await callback.answer()
+
+
+@router.message(ApplicationForm.entering_promo_code)
+async def enter_promo_code_input(message: Message, state: FSMContext):
+    students = find_students_by_telegram_id(message.from_user.id)
+    if not students:
+        await state.set_state(ApplicationForm.menu)
+        await message.answer("❌ Вы не найдены в базе учеников.")
+        return
+    student_id = students[0][0]
+    code = (message.text or "").strip().upper()
+    if not code:
+        await message.answer("Введите текст промокода.")
+        return
+    ok, result = apply_promo_code_for_student(student_id, code)
+    if ok:
+        dtype, dvalue = result.split(":", 1)
+        unit = "%" if dtype == "percent" else "₽"
+        text = (
+            f"✅ Промокод <b>{code}</b> активирован!\n"
+            f"Скидка {int(float(dvalue))}{unit} будет применена при следующей оплате."
+        )
+    elif result == "not_found":
+        text = f"❌ Промокод <b>{code}</b> не найден. Проверьте правильность написания."
+    elif result == "inactive":
+        text = f"❌ Промокод <b>{code}</b> деактивирован."
+    elif result == "expired":
+        text = f"❌ Срок действия промокода <b>{code}</b> истёк."
+    elif result == "limit_reached":
+        text = f"❌ Промокод <b>{code}</b> исчерпал лимит использований."
+    elif result == "already_assigned":
+        text = f"✅ Промокод <b>{code}</b> уже применён к вашему аккаунту."
+    else:
+        text = "⚠️ Произошла ошибка. Попробуйте позже или обратитесь к администратору."
+    await state.set_state(ApplicationForm.menu)
+    await message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Оплатить занятия", callback_data="menu_paid")],
+            [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+        ]),
+    )
 
 
 @router.callback_query(lambda c: c.data == "faq_referral")
