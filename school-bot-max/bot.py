@@ -5,7 +5,9 @@ Long-polling loop over MAX Bot API. Dispatches updates to handlers.py.
 
 import asyncio
 import logging
+import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -19,7 +21,11 @@ from handlers import (
     handle_photo,
     handle_text,
 )
-from shared.database import init_db
+from shared.database import (
+    get_debt_rows_for_reminder_max,
+    init_db,
+    mark_debt_reminder_sent,
+)
 from shared.logging_setup import get_log_settings, setup_logging
 from shared.max_api import MaxApiClient
 
@@ -88,6 +94,58 @@ async def process_update(api: MaxApiClient, update: dict) -> None:
         )
 
 
+async def debt_reminder_worker(api: MaxApiClient) -> None:
+    logger = logging.getLogger(__name__)
+    reminder_weekday = int(os.getenv("SCHOOL_DEBT_REMINDER_WEEKDAY", "0"))
+    reminder_hour = int(os.getenv("SCHOOL_DEBT_REMINDER_HOUR", "10"))
+
+    while True:
+        try:
+            now = datetime.now(timezone.utc).astimezone()
+            iso_year, iso_week, _ = now.isocalendar()
+            reminder_key = f"{iso_year}-W{iso_week:02d}"
+            schedule_reached = (
+                now.weekday() > reminder_weekday
+                or (now.weekday() == reminder_weekday and now.hour >= reminder_hour)
+            )
+            if schedule_reached:
+                rows = get_debt_rows_for_reminder_max(reminder_key)
+                grouped: dict[int, list] = {}
+                for student_lesson_id, max_id, student_name, teacher_name, subject_name, lesson_balance in rows:
+                    grouped.setdefault(max_id, []).append(
+                        (student_lesson_id, student_name, teacher_name, subject_name, lesson_balance)
+                    )
+
+                for max_id, debts in grouped.items():
+                    student_name = debts[0][1]
+                    lines = [
+                        "❗❗❗🔴 ВНИМАНИЕ! У ВАС ЗАДОЛЖЕННОСТЬ! 🔴❗❗❗",
+                        "",
+                        f"Ученик: {student_name}",
+                        "",
+                        "Направления с задолженностью:",
+                    ]
+                    for _, _, teacher_name, subject_name, lesson_balance in debts:
+                        lines.append(
+                            f"- {subject_name} — {teacher_name}: задолженность {abs(lesson_balance)} занят."
+                        )
+                    lines += ["", "❗❗❗ Пожалуйста, внесите оплату или свяжитесь с администратором школы. ❗❗❗"]
+
+                    try:
+                        await api.send_message(max_id, "\n".join(lines))
+                    except Exception as exc:
+                        logger.warning("MAX debt reminder failed for %s: %s", max_id, exc)
+                        continue
+
+                    for student_lesson_id, *_ in debts:
+                        mark_debt_reminder_sent(student_lesson_id, reminder_key)
+
+        except Exception as exc:
+            logger.exception("MAX debt reminder worker error: %s", exc)
+
+        await asyncio.sleep(3600)
+
+
 async def polling_loop(api: MaxApiClient) -> None:
     logger = logging.getLogger(__name__)
     marker = 0
@@ -123,7 +181,15 @@ async def main() -> None:
     except Exception as exc:
         logging.getLogger(__name__).warning("Could not fetch bot info: %s", exc)
 
-    await polling_loop(api)
+    reminder_task = asyncio.create_task(debt_reminder_worker(api))
+    try:
+        await polling_loop(api)
+    finally:
+        reminder_task.cancel()
+        try:
+            await reminder_task
+        except asyncio.CancelledError:
+            pass
 
 
 if __name__ == "__main__":

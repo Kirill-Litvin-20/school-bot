@@ -9,7 +9,10 @@ class ApplicationForm(StatesGroup):
     teacher_card = State()
     review_card = State()
 
+    payment_type_choice = State()
+    package_selection = State()
     payment_proof = State()
+    entering_promo_code = State()
 
     name = State()
     school_class = State()

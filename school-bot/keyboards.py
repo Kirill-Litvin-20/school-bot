@@ -79,6 +79,7 @@ def get_faq_menu_keyboard():
             [InlineKeyboardButton(text="💳 Как оплатить", callback_data="faq_pay")],
             [InlineKeyboardButton(text="📦 Что такое пакет занятий", callback_data="faq_package")],
             [InlineKeyboardButton(text="🔄 Перенос и отмена занятий", callback_data="faq_reschedule")],
+            [InlineKeyboardButton(text="🎟 Промокоды", callback_data="faq_promo")],
             [InlineKeyboardButton(text="🎁 Реферальная программа", callback_data="faq_referral")],
             [InlineKeyboardButton(text="👤 Привязка аккаунта", callback_data="faq_link")],
             [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
@@ -332,11 +333,45 @@ def get_offer_application_keyboard(offer_type: str):
     )
 
 
+def _strike(s: str) -> str:
+    """Unicode combining strikethrough for plain button text."""
+    return "".join(c + "̶" for c in s)
+
+
+def _fmt_price(p: int) -> str:
+    s = str(p)
+    return s[:-3] + " " + s[-3:] if len(s) > 3 else s
+
+
+def get_package_selection_keyboard(packages: dict, promo=None) -> InlineKeyboardMarkup:
+    """packages: {lessons: price}, promo: tuple (id,code,dtype,dvalue,expires) or None"""
+    buttons = []
+    promo_dtype = promo_dvalue = None
+    if promo:
+        _, _, promo_dtype, promo_dvalue, _ = promo
+        promo_dvalue = float(promo_dvalue)
+
+    for lessons, price in sorted(packages.items()):
+        if promo_dtype == "fixed_rub":
+            discounted = max(0, price - int(promo_dvalue))
+            label = f"{lessons} зан. — {_strike(_fmt_price(price) + '₽')} → {_fmt_price(discounted)}₽"
+        elif promo_dtype == "percent":
+            discounted = int(price * (1 - promo_dvalue / 100))
+            label = f"{lessons} зан. — {_strike(_fmt_price(price) + '₽')} → {_fmt_price(discounted)}₽"
+        else:
+            label = f"{lessons} зан. — {_fmt_price(price)}₽"
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"pay_package_{lessons}")])
+
+    buttons.append([InlineKeyboardButton(text="← Назад", callback_data="pay_back_to_type")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def get_cabinet_keyboard():
     """Клавиатура для личного кабинета ученика"""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="💳 Оплатить занятия", callback_data="menu_paid")],
+            [InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")],
             [InlineKeyboardButton(text="✉️ Написать администратору", url="https://t.me/integral_school_ru")],
             [InlineKeyboardButton(text="🎁 Мой реферальный код", callback_data="show_referral_code")],
             [InlineKeyboardButton(text="🔗 Подключить MAX", callback_data="link_max_start")],

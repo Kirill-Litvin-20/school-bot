@@ -200,7 +200,22 @@ async def choose_user_type(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(lambda c: c.data == "back_to_menu")
 async def back_to_menu(callback: CallbackQuery, state: FSMContext):
-    await show_main_menu(callback.message, state)
+    data = await state.get_data()
+    user_type = data.get("user_type")
+    await state.clear()
+    if user_type:
+        await state.update_data(user_type=user_type)
+    await state.set_state(ApplicationForm.menu)
+    try:
+        await callback.message.edit_text(
+            "📋 Пожалуйста, выберите нужный раздел:",
+            reply_markup=get_main_menu_keyboard(),
+        )
+    except Exception:
+        await callback.message.answer(
+            "📋 Пожалуйста, выберите нужный раздел:",
+            reply_markup=get_main_menu_keyboard(),
+        )
     await callback.answer()
 
 
@@ -248,11 +263,10 @@ async def menu_cabinet(callback: CallbackQuery, state: FSMContext):
     students = find_students_by_telegram_id(callback.from_user.id)
 
     if not students:
-        await callback.message.answer(
-            "❌ Мы пока не нашли Вас в базе учеников.\n"
-            "Пожалуйста, обратитесь к администратору, чтобы привязать Telegram ID к Вашей карточке."
+        await callback.answer(
+            "❌ Вы не найдены в базе учеников. Обратитесь к администратору.",
+            show_alert=True,
         )
-        await callback.answer()
         return
 
     student_id, student_name, _, _ = students[0]
@@ -264,11 +278,15 @@ async def menu_cabinet(callback: CallbackQuery, state: FSMContext):
         )
         text = build_cabinet_text(student_name, directions, recent_payments, student_id=student_id)
         text += build_multi_students_warning(len(students))
-        await callback.message.answer(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard())
+        try:
+            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard())
+        except Exception:
+            await callback.message.answer(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard())
     except Exception:
         logger.exception("menu_cabinet failed for user %s", callback.from_user.id)
-        await callback.message.answer(
-            "⚠️ Не удалось загрузить личный кабинет. Попробуйте ещё раз или обратитесь к администратору."
+        await callback.answer(
+            "⚠️ Не удалось загрузить личный кабинет. Попробуйте ещё раз.",
+            show_alert=True,
         )
     await callback.answer()
 
@@ -579,33 +597,49 @@ async def faq_promo(callback: CallbackQuery):
 async def enter_promo_start(callback: CallbackQuery, state: FSMContext):
     students = find_students_by_telegram_id(callback.from_user.id)
     if not students:
-        await callback.message.answer(
-            "❌ Вы не найдены в базе учеников. Обратитесь к администратору."
-        )
-        await callback.answer()
+        await callback.answer("❌ Вы не найдены в базе учеников.", show_alert=True)
         return
     promo = get_active_promo_for_user(callback.from_user.id)
     if promo:
         _, code, dtype, dvalue, _ = promo
         unit = "%" if dtype == "percent" else "₽"
-        await callback.message.answer(
-            f"✅ У вас уже активен промокод <b>{code}</b> (скидка {int(dvalue)}{unit}).\n\n"
-            "Для замены промокода обратитесь к администратору.",
+        try:
+            await callback.message.edit_text(
+                f"✅ У вас уже активен промокод <b>{code}</b> (скидка {int(float(dvalue))}{unit}).\n\n"
+                "Для замены промокода обратитесь к администратору.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")
+                ]]),
+            )
+        except Exception:
+            await callback.message.answer(
+                f"✅ У вас уже активен промокод <b>{code}</b> (скидка {int(float(dvalue))}{unit}).\n\n"
+                "Для замены промокода обратитесь к администратору.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")
+                ]]),
+            )
+        await callback.answer()
+        return
+    await state.set_state(ApplicationForm.entering_promo_code)
+    try:
+        await callback.message.edit_text(
+            "🎟 <b>Введите промокод</b>\n\nНапишите код в следующем сообщении:",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")
             ]]),
         )
-        await callback.answer()
-        return
-    await state.set_state(ApplicationForm.entering_promo_code)
-    await callback.message.answer(
-        "🎟 <b>Введите промокод</b>\n\nНапишите код в следующем сообщении:",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")
-        ]]),
-    )
+    except Exception:
+        await callback.message.answer(
+            "🎟 <b>Введите промокод</b>\n\nНапишите код в следующем сообщении:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")
+            ]]),
+        )
     await callback.answer()
 
 

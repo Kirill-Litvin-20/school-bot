@@ -5,7 +5,7 @@ import importlib.util
 import secrets
 import re
 from html import escape
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 try:
@@ -534,13 +534,86 @@ def init_db():
         """
     )
 
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS promo_codes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT UNIQUE NOT NULL COLLATE NOCASE,
+        discount_type TEXT NOT NULL CHECK(discount_type IN ('percent', 'fixed_rub')),
+        discount_value REAL NOT NULL,
+        applies_to_packages INTEGER NOT NULL DEFAULT 0,
+        max_uses INTEGER,
+        used_count INTEGER NOT NULL DEFAULT 0,
+        valid_until TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS student_promo_codes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id INTEGER NOT NULL,
+        promo_code_id INTEGER NOT NULL,
+        assigned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(student_id) REFERENCES students(id),
+        FOREIGN KEY(promo_code_id) REFERENCES promo_codes(id),
+        UNIQUE(student_id, promo_code_id)
+    )
+    """)
+
     _ensure_postgres_bigint_columns(cur)
+    _ensure_promo_codes_columns(cur)
     _cleanup_teacher_profiles_for_non_teacher_users(cur)
     conn.commit()
     _sync_teacher_subject_links()
     conn.close()
     if _is_truthy_env(os.getenv("SCHOOL_SEED_TEACHERS_FROM_CATALOG", "0")):
         sync_teachers_from_catalog()
+
+
+def _ensure_promo_codes_columns(cur):
+    """Add missing columns to promo_codes table (PostgreSQL migration safety)."""
+    if USE_POSTGRES:
+        cur.execute(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'promo_codes'
+            """
+        )
+        existing = {row[0] for row in cur.fetchall()}
+        if "applies_to_packages" not in existing:
+            cur.execute("ALTER TABLE promo_codes ADD COLUMN applies_to_packages INTEGER NOT NULL DEFAULT 0")
+        if "max_uses" not in existing:
+            cur.execute("ALTER TABLE promo_codes ADD COLUMN max_uses INTEGER")
+        if "used_count" not in existing:
+            cur.execute("ALTER TABLE promo_codes ADD COLUMN used_count INTEGER NOT NULL DEFAULT 0")
+        if "valid_until" not in existing:
+            cur.execute("ALTER TABLE promo_codes ADD COLUMN valid_until TEXT")
+        if "active" not in existing:
+            cur.execute("ALTER TABLE promo_codes ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+        if "created_at" not in existing:
+            cur.execute("ALTER TABLE promo_codes ADD COLUMN created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP")
+        # Make created_by and created_at nullable (old schema had them NOT NULL without defaults)
+        cur.execute("""
+            SELECT is_nullable FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'promo_codes' AND column_name = 'created_by'
+        """)
+        row = cur.fetchone()
+        if row and row[0] == "NO":
+            cur.execute("ALTER TABLE promo_codes ALTER COLUMN created_by DROP NOT NULL")
+        cur.execute("""
+            SELECT is_nullable, column_default FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'promo_codes' AND column_name = 'created_at'
+        """)
+        row = cur.fetchone()
+        if row and (row[0] == "NO" or not row[1]):
+            cur.execute("ALTER TABLE promo_codes ALTER COLUMN created_at DROP NOT NULL")
+            cur.execute("ALTER TABLE promo_codes ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP")
+    else:
+        cur.execute("PRAGMA table_info(promo_codes)")
+        existing = {row[1] for row in cur.fetchall()}
+        if "applies_to_packages" not in existing:
+            cur.execute("ALTER TABLE promo_codes ADD COLUMN applies_to_packages INTEGER NOT NULL DEFAULT 0")
 
 
 def _ensure_teachers_table_columns(cur: sqlite3.Cursor):
@@ -2192,6 +2265,36 @@ def finalize_payment_with_topup(
         if cur.rowcount == 0:
             conn.rollback()
             return False
+
+        # Increment used_count for any active promo the payer has
+        cur.execute(
+            """
+            SELECT COALESCE(s.id, s2.id)
+            FROM payment_requests pr
+            LEFT JOIN students s ON s.telegram_id = pr.telegram_user_id
+            LEFT JOIN students s2 ON s2.max_id = pr.max_user_id
+            WHERE pr.id = ?
+            LIMIT 1
+            """,
+            (payment_request_id,)
+        )
+        payer_row = cur.fetchone()
+        if payer_row and payer_row[0]:
+            cur.execute(
+                """
+                SELECT pc.id FROM promo_codes pc
+                JOIN student_promo_codes spc ON spc.promo_code_id = pc.id
+                WHERE spc.student_id = ? AND pc.active = 1
+                ORDER BY spc.assigned_at DESC LIMIT 1
+                """,
+                (payer_row[0],)
+            )
+            promo_row = cur.fetchone()
+            if promo_row:
+                cur.execute(
+                    "UPDATE promo_codes SET used_count = used_count + 1 WHERE id = ?",
+                    (promo_row[0],)
+                )
 
         conn.commit()
         return True
@@ -4010,6 +4113,39 @@ def get_debt_rows_for_reminder(reminder_date: str):
     return rows
 
 
+def get_debt_rows_for_reminder_max(reminder_date: str):
+    """Like get_debt_rows_for_reminder but for MAX users (students with max_id set)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            sl.id,
+            s.max_id,
+            s.full_name,
+            t.full_name,
+            sl.subject_name,
+            sl.lesson_balance
+        FROM student_lessons sl
+        JOIN students s ON s.id = sl.student_id
+        JOIN teachers t ON t.id = sl.teacher_id
+        WHERE sl.lesson_balance < 0
+          AND s.max_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM debt_reminder_log dr
+              WHERE dr.student_lesson_id = sl.id
+                AND dr.reminder_date = ?
+          )
+        ORDER BY s.id, sl.id
+        """,
+        (reminder_date,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
 def get_current_debtors_summary(limit: int = 200) -> list[dict]:
     conn = get_connection()
     cur = conn.cursor()
@@ -5172,6 +5308,287 @@ def get_recent_payment_history_by_max_user(max_user_id: int, limit: int = 4) -> 
     return rows
 
 
+def get_active_promo_for_student_id(student_id: int):
+    """Return active promo for student by student.id (id, code, discount_type, discount_value, applies_to_packages) or None."""
+    _MSK = timezone(timedelta(hours=3))
+    now = datetime.now(_MSK).strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT pc.id, pc.code, pc.discount_type, pc.discount_value, pc.applies_to_packages
+        FROM promo_codes pc
+        JOIN student_promo_codes spc ON spc.promo_code_id = pc.id
+        WHERE spc.student_id = ?
+          AND pc.active = 1
+          AND (pc.valid_until IS NULL OR pc.valid_until >= ?)
+          AND (pc.max_uses IS NULL OR pc.used_count < pc.max_uses)
+        ORDER BY spc.assigned_at DESC
+        LIMIT 1
+        """,
+        (student_id, now),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
 def get_active_promo_for_user(telegram_user_id: int):
-    """Stub — promo system not yet implemented. Returns None."""
-    return None
+    """Return active promo code for user as (id, code, discount_type, discount_value, applies_to_packages) or None."""
+    _MSK = timezone(timedelta(hours=3))
+    now = datetime.now(_MSK).strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT pc.id, pc.code, pc.discount_type, pc.discount_value, pc.applies_to_packages
+        FROM promo_codes pc
+        JOIN student_promo_codes spc ON spc.promo_code_id = pc.id
+        JOIN students s ON s.id = spc.student_id
+        WHERE s.telegram_id = ?
+          AND pc.active = 1
+          AND (pc.valid_until IS NULL OR pc.valid_until >= ?)
+          AND (pc.max_uses IS NULL OR pc.used_count < pc.max_uses)
+        ORDER BY spc.assigned_at DESC
+        LIMIT 1
+        """,
+        (telegram_user_id, now),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def get_active_promo_for_max_user(max_user_id: int):
+    """Same as get_active_promo_for_user but for MAX users."""
+    _MSK = timezone(timedelta(hours=3))
+    now = datetime.now(_MSK).strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT pc.id, pc.code, pc.discount_type, pc.discount_value, pc.applies_to_packages
+        FROM promo_codes pc
+        JOIN student_promo_codes spc ON spc.promo_code_id = pc.id
+        JOIN students s ON s.id = spc.student_id
+        WHERE s.max_id = ?
+          AND pc.active = 1
+          AND (pc.valid_until IS NULL OR pc.valid_until >= ?)
+          AND (pc.max_uses IS NULL OR pc.used_count < pc.max_uses)
+        ORDER BY spc.assigned_at DESC
+        LIMIT 1
+        """,
+        (max_user_id, now),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def get_student_max_id(student_id: int) -> int | None:
+    """Return max_id for a student or None."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT max_id FROM students WHERE id = ?", (student_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def create_promo_code(
+    code: str,
+    discount_type: str,
+    discount_value: float,
+    valid_until: str | None = None,
+    max_uses: int | None = None,
+) -> int | None:
+    """Create a new promo code. Returns the new id, or None if code already exists."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO promo_codes (code, discount_type, discount_value, valid_until, max_uses, active)
+            VALUES (?, ?, ?, ?, ?, 1)
+            """,
+            (code.upper().strip(), discount_type, discount_value, valid_until, max_uses),
+        )
+        conn.commit()
+        row_id = cur.lastrowid
+        conn.close()
+        return row_id
+    except Exception:
+        conn.close()
+        return None
+
+
+def apply_promo_code_for_student(student_id: int, code: str) -> tuple[bool, str]:
+    """Find promo by code text, validate, assign to student.
+
+    Returns (True, "dtype:dvalue") on success or (False, reason) on failure.
+    Reasons: not_found, inactive, expired, limit_reached, already_assigned, error
+    """
+    _MSK = timezone(timedelta(hours=3))
+    now = datetime.now(_MSK).strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT id, code, discount_type, discount_value, active, valid_until, max_uses, used_count
+               FROM promo_codes WHERE code = ?""",
+            (code.upper().strip(),),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False, "not_found"
+        promo_id, _, dtype, dvalue, active, valid_until, max_uses, used_count = row
+        if not active:
+            return False, "inactive"
+        if valid_until and valid_until < now:
+            return False, "expired"
+        if max_uses is not None and used_count >= max_uses:
+            return False, "limit_reached"
+        cur.execute(
+            "SELECT id FROM student_promo_codes WHERE student_id = ? AND promo_code_id = ?",
+            (student_id, promo_id),
+        )
+        if cur.fetchone():
+            return False, "already_assigned"
+        cur.execute(
+            "INSERT INTO student_promo_codes (student_id, promo_code_id) VALUES (?, ?)",
+            (student_id, promo_id),
+        )
+        conn.commit()
+        return True, f"{dtype}:{dvalue}"
+    except Exception:
+        return False, "error"
+    finally:
+        conn.close()
+
+
+def assign_promo_to_student(student_id: int, promo_code_id: int) -> bool:
+    """Assign a promo code to a student. Returns False if already assigned."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO student_promo_codes (student_id, promo_code_id) VALUES (?, ?)",
+            (student_id, promo_code_id),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        conn.close()
+        return False
+
+
+def list_promo_codes() -> list[dict]:
+    """Return all promo codes ordered by created_at desc."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT pc.id, pc.code, pc.discount_type, pc.discount_value,
+               pc.valid_until, pc.max_uses, pc.used_count, pc.active,
+               COUNT(spc.student_id) AS assigned_count
+        FROM promo_codes pc
+        LEFT JOIN student_promo_codes spc ON spc.promo_code_id = pc.id
+        GROUP BY pc.id
+        ORDER BY pc.id DESC
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {
+            "id": r[0], "code": r[1], "discount_type": r[2], "discount_value": r[3],
+            "valid_until": r[4], "max_uses": r[5], "used_count": r[6],
+            "active": r[7], "assigned_count": r[8],
+        }
+        for r in rows
+    ]
+
+
+def get_promo_code_by_id(promo_id: int) -> dict | None:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, code, discount_type, discount_value, valid_until, max_uses, used_count, active FROM promo_codes WHERE id = ?", (promo_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"id": row[0], "code": row[1], "discount_type": row[2], "discount_value": row[3],
+            "valid_until": row[4], "max_uses": row[5], "used_count": row[6], "active": row[7]}
+
+
+def deactivate_promo_code(promo_id: int) -> bool:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("UPDATE promo_codes SET active = 0 WHERE id = ?", (promo_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def get_revenue_by_period() -> dict:
+    """Return revenue stats grouped by week and month for the revenue sheet."""
+    conn = get_connection()
+    cur = conn.cursor()
+
+    if USE_POSTGRES:
+        week_sql = """
+            SELECT
+                TO_CHAR(lesson_date::date, 'IYYY-IW') AS week_key,
+                MIN(lesson_date) AS week_start,
+                COUNT(*) AS lessons
+            FROM attendance
+            WHERE status IN ('present', 'completed')
+            GROUP BY week_key
+            ORDER BY week_key DESC
+            LIMIT 8
+        """
+        month_sql = """
+            SELECT
+                TO_CHAR(lesson_date::date, 'YYYY-MM') AS month_key,
+                COUNT(*) AS lessons
+            FROM attendance
+            WHERE status IN ('present', 'completed')
+            GROUP BY month_key
+            ORDER BY month_key DESC
+            LIMIT 6
+        """
+    else:
+        week_sql = """
+            SELECT
+                strftime('%Y-W%W', lesson_date) AS week_key,
+                MIN(lesson_date) AS week_start,
+                COUNT(*) AS lessons
+            FROM attendance
+            WHERE status IN ('present', 'completed')
+            GROUP BY week_key
+            ORDER BY week_key DESC
+            LIMIT 8
+        """
+        month_sql = """
+            SELECT
+                strftime('%Y-%m', lesson_date) AS month_key,
+                COUNT(*) AS lessons
+            FROM attendance
+            WHERE status IN ('present', 'completed')
+            GROUP BY month_key
+            ORDER BY month_key DESC
+            LIMIT 6
+        """
+
+    cur.execute(week_sql)
+    weeks = [{"week_key": str(r[0]), "week_start": str(r[1]), "lessons": r[2]} for r in cur.fetchall()]
+
+    cur.execute(month_sql)
+    months = [{"month_key": str(r[0]), "lessons": r[1]} for r in cur.fetchall()]
+
+    cur.execute("SELECT COUNT(*) FROM attendance WHERE status IN ('present', 'completed')")
+    total = cur.fetchone()[0] or 0
+
+    conn.close()
+    return {"weeks": weeks, "months": months, "total": total}

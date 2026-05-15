@@ -53,3 +53,14 @@ PAYMENT_BANK_NUMBER = os.getenv("SCHOOL_PAYMENT_BANK_NUMBER", "89996604789")
 PAYMENT_BANK_NAME = os.getenv("SCHOOL_PAYMENT_BANK_NAME", "СБЕР")
 PAYMENT_ACCOUNT_HOLDER = os.getenv("SCHOOL_PAYMENT_ACCOUNT_HOLDER", "Александр Сергеевич К.")
 PAYMENT_PHOTO_FILE_ID = os.getenv("SCHOOL_PAYMENT_PHOTO_FILE_ID", "AgACAgIAAxkBAAINs2n8aaX7z3Gpm8As2nPF20YRMf3ZAALgEmsbVC_oS5OzEg8MiakgAQADAgADeQADOwQ")
+LESSON_PRICE = int(os.getenv("LESSON_PRICE", "0"))
+PACKAGE_PRICES: dict[int, int] = {}  # lessons_count -> price, loaded below
+_raw_packages = os.getenv("PACKAGE_PRICES", "")  # format: "4:5000,8:9000,12:13000"
+for _item in _raw_packages.split(","):
+    _item = _item.strip()
+    if ":" in _item:
+        _k, _v = _item.split(":", 1)
+        try:
+            PACKAGE_PRICES[int(_k.strip())] = int(_v.strip())
+        except ValueError:
+            pass

@@ -38,6 +38,7 @@ MAX_BOT_TOKEN = _require("SCHOOL_MAX_BOT_TOKEN")
 
 # TG bot token — used only for forwarding payment receipts and applications to TG chats
 TG_BOT_TOKEN = _require("SCHOOL_BOT_TOKEN")
+TG_BOT_USERNAME = os.getenv("SCHOOL_BOT_USERNAME", "integral_school_ru_bot")
 PAYMENTS_CHAT_ID = _require_int("SCHOOL_BOT_PAYMENTS_CHAT_ID")
 APPLICATIONS_CHAT_ID = _require_int("SCHOOL_BOT_APPLICATIONS_CHAT_ID")
 
@@ -45,3 +46,14 @@ APPLICATIONS_CHAT_ID = _require_int("SCHOOL_BOT_APPLICATIONS_CHAT_ID")
 PAYMENT_BANK_NUMBER = os.getenv("SCHOOL_PAYMENT_BANK_NUMBER", "89996604789")
 PAYMENT_BANK_NAME = os.getenv("SCHOOL_PAYMENT_BANK_NAME", "СБЕР")
 PAYMENT_ACCOUNT_HOLDER = os.getenv("SCHOOL_PAYMENT_ACCOUNT_HOLDER", "Александр Сергеевич К.")
+LESSON_PRICE = int(os.getenv("LESSON_PRICE", "0"))
+PACKAGE_PRICES: dict[int, int] = {}
+_raw_packages = os.getenv("PACKAGE_PRICES", "")
+for _item in _raw_packages.split(","):
+    _item = _item.strip()
+    if ":" in _item:
+        _k, _v = _item.split(":", 1)
+        try:
+            PACKAGE_PRICES[int(_k.strip())] = int(_v.strip())
+        except ValueError:
+            pass

@@ -13,6 +13,7 @@ from keyboards import (
 from states import ApplicationForm
 from shared.database import (
     get_active_invitee_discount_percent,
+    get_active_promo_for_student_id,
     get_active_review_cards,
     get_attendance_summary_for_student,
     get_recent_attendance_for_student,
@@ -20,6 +21,34 @@ from shared.database import (
 )
 
 BOT_DIR = Path(__file__).resolve().parent.parent.parent  # Points to /opt/school-system/
+
+
+async def flow_edit(
+    callback: CallbackQuery,
+    state: FSMContext,
+    text: str,
+    reply_markup=None,
+    parse_mode: str | None = None,
+) -> None:
+    """Edit the current flow message in-place and save its ID to FSM state."""
+    try:
+        await callback.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        await state.update_data(_flow_msg_id=callback.message.message_id)
+    except Exception:
+        sent = await callback.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        await state.update_data(_flow_msg_id=sent.message_id)
+
+
+async def flow_message(
+    message: Message,
+    state: FSMContext,
+    text: str,
+    reply_markup=None,
+    parse_mode: str | None = None,
+) -> None:
+    """Send a new flow message and save its ID to FSM state."""
+    sent = await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    await state.update_data(_flow_msg_id=sent.message_id)
 
 
 def is_valid_telegram_username(text: str) -> bool:
@@ -236,6 +265,11 @@ def build_cabinet_text(
                 f"   • 🎁 Активна реферальная скидка <b>{discount_percent}%</b> "
                 "на первое платное занятие"
             )
+        promo = get_active_promo_for_student_id(student_id)
+        if promo:
+            _, code, dtype, dvalue, _ = promo
+            unit = "%" if dtype == "percent" else "₽"
+            lines.append(f"   • 🎟 Активный промокод: <b>{code}</b> (скидка {int(dvalue)}{unit})")
 
     if directions:
         lines.extend(["", "<b>📚 Ваши направления</b>"])
@@ -334,6 +368,8 @@ def build_payment_caption(
     caption_text: str | None,
     status_text: str,
     referral_discount_percent: int | None = None,
+    payment_type_label: str | None = None,
+    promo_label: str | None = None,
 ) -> str:
     text = (
         f"💳 <b>Оплата #{payment_request_id}</b>\n\n"
@@ -342,6 +378,12 @@ def build_payment_caption(
         f"🔗 <b>Username:</b> {username if username else 'не указан'}\n"
         f"🆔 <b>Telegram ID:</b> <code>{telegram_user_id if telegram_user_id else '-'}</code>"
     )
+
+    if payment_type_label:
+        text += f"\n💰 <b>Тип оплаты:</b> {payment_type_label}"
+
+    if promo_label:
+        text += f"\n🎟 <b>Промокод:</b> {promo_label}"
 
     if referral_discount_percent:
         text += (

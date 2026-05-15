@@ -49,12 +49,18 @@ def main_menu_kb() -> list[dict]:
     )
 
 
-def cabinet_kb() -> list[dict]:
-    return keyboard(
+def cabinet_kb(tg_linked: bool = False) -> list[dict]:
+    rows = [
         [btn("💳 Оплатить занятия", "menu_paid")],
+        [btn("🎟 Ввести промокод", "enter_promo")],
         [btn_url("✉️ Написать администратору", "https://t.me/integral_school_ru")],
-        [btn("← В меню", "back_to_menu")],
-    )
+    ]
+    if tg_linked:
+        rows.append([btn("✅ Telegram подключён", "noop")])
+    else:
+        rows.append([btn("🔗 Связать с Telegram", "link_tg")])
+    rows.append([btn("← В меню", "back_to_menu")])
+    return keyboard(*rows)
 
 
 def faq_kb() -> list[dict]:
@@ -62,6 +68,7 @@ def faq_kb() -> list[dict]:
         [btn("💳 Как оплатить", "faq_pay")],
         [btn("📦 Что такое пакет занятий", "faq_package")],
         [btn("🔄 Перенос и отмена занятий", "faq_reschedule")],
+        [btn("🎟 Промокоды", "faq_promo")],
         [btn("← В меню", "back_to_menu")],
     )
 
@@ -163,6 +170,38 @@ def offers_kb() -> list[dict]:
         [btn("🤝 Реферальная программа", "offer_referral_program")],
         [btn("← В меню", "back_to_menu")],
     )
+
+
+def _strike(s: str) -> str:
+    return "".join(c + "̶" for c in s)
+
+
+def _fmt_price(p: int) -> str:
+    s = str(p)
+    return s[:-3] + " " + s[-3:] if len(s) > 3 else s
+
+
+def package_selection_kb(packages: dict, promo=None) -> list[dict]:
+    """packages: {lessons: price}, promo: tuple or None"""
+    promo_dtype = promo_dvalue = None
+    if promo:
+        _, _, promo_dtype, promo_dvalue, _ = promo
+        promo_dvalue = float(promo_dvalue)
+
+    rows = []
+    for lessons, price in sorted(packages.items()):
+        if promo_dtype == "fixed_rub":
+            discounted = max(0, price - int(promo_dvalue))
+            label = f"{lessons} зан. — {_strike(_fmt_price(price) + '₽')} → {_fmt_price(discounted)}₽"
+        elif promo_dtype == "percent":
+            discounted = int(price * (1 - promo_dvalue / 100))
+            label = f"{lessons} зан. — {_strike(_fmt_price(price) + '₽')} → {_fmt_price(discounted)}₽"
+        else:
+            label = f"{lessons} зан. — {_fmt_price(price)}₽"
+        rows.append([btn(label, f"pay_package_{lessons}")])
+
+    rows.append([btn("← Назад", "pay_back_to_type")])
+    return keyboard(*rows)
 
 
 def teacher_subjects_kb(subjects: list[str]) -> list[dict]:

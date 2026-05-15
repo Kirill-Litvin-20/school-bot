@@ -18,4 +18,9 @@ APP_CONTACT_VALUE = "app_contact_value"
 APP_COMMENT = "app_comment"
 
 # Payment
+PAYMENT_TYPE_CHOICE = "payment_type_choice"
+PACKAGE_SELECTION = "package_selection"
 PAYMENT_PROOF = "payment_proof"
+
+# Promo code entry
+ENTER_PROMO = "enter_promo"

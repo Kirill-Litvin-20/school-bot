@@ -40,6 +40,7 @@ def get_superadmin_school_menu():
             [InlineKeyboardButton(text="💳 Корректировка баланса", callback_data="admin_add_balance")],
             [InlineKeyboardButton(text="✅ Посещаемость", callback_data="admin_attendance")],
             [InlineKeyboardButton(text="📜 История баланса", callback_data="admin_balance_history")],
+            [InlineKeyboardButton(text="🎟 Промокоды", callback_data="admin_promo_list")],
             [InlineKeyboardButton(text="← Назад", callback_data="superadmin_back_main")],
         ]
     )
@@ -99,7 +100,18 @@ def get_admin_finance_menu():
             [InlineKeyboardButton(text="💳 Корректировка баланса", callback_data="admin_add_balance")],
             [InlineKeyboardButton(text="📜 История баланса", callback_data="admin_balance_history")],
             [InlineKeyboardButton(text="💬 Сообщение в чат оплат", callback_data="admin_payment_chat_message")],
+            [InlineKeyboardButton(text="🎟 Промокоды", callback_data="admin_promo_list")],
             [InlineKeyboardButton(text="← Назад", callback_data="admin_back_main")],
+        ]
+    )
+
+
+def get_promo_discount_type_kb():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="% Процентная скидка", callback_data="promo_type_percent")],
+            [InlineKeyboardButton(text="₽ Фиксированная сумма", callback_data="promo_type_fixed_rub")],
+            [InlineKeyboardButton(text="Отмена", callback_data="admin_promo_list")],
         ]
     )
 

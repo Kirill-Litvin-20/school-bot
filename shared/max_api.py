@@ -161,6 +161,15 @@ class MaxApiClient:
             body["attachments"] = attachments
         return await self._put("/messages", body, message_id=message_id)
 
+    async def delete_message(self, message_id: str) -> None:
+        try:
+            url = f"{_BASE}/messages"
+            async with aiohttp.ClientSession(headers=self._headers) as session:
+                async with session.delete(url, params={"message_id": message_id}) as resp:
+                    resp.raise_for_status()
+        except Exception as exc:
+            logger.debug("delete_message mid=%s failed: %s", message_id, exc)
+
     # ── bot info ───────────────────────────────────────────────────────────
 
     async def get_me(self) -> dict:
