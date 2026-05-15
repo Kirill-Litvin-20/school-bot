@@ -243,104 +243,62 @@ def build_cabinet_text(
     positive_balance = sum(d[3] for d in directions if d[3] > 0)
     debt_total = sum(-d[3] for d in directions if d[3] < 0)
 
-    lines = [
-        "╔══════════════════════════╗",
-        "  👤 <b>ЛИЧНЫЙ КАБИНЕТ</b>",
-        "╚══════════════════════════╝",
-        "",
-        f"👋 <b>{student_name}</b>",
-        "",
-        "<b>📊 Сводка</b>",
-        f"   • Занятий на балансе: <b>{positive_balance}</b>",
-    ]
+    lines = [f"👤 <b>{student_name}</b> — Личный кабинет", ""]
+
+    # --- Баланс ---
+    balance_icon = "⚠️" if debt_total > 0 else "✅"
+    lines.append(f"<b>Баланс:</b> {positive_balance} занятий {balance_icon}")
     if debt_total > 0:
-        lines.append(f"   • Задолженность: <b>{debt_total}</b> занятий ⚠️")
-    else:
-        lines.append("   • Задолженность: нет ✅")
+        lines.append(f"<b>Долг:</b> {debt_total} занятий")
 
     if student_id is not None:
         discount_percent = get_active_invitee_discount_percent(student_id)
         if discount_percent:
-            lines.append(
-                f"   • 🎁 Активна реферальная скидка <b>{discount_percent}%</b> "
-                "на первое платное занятие"
-            )
+            lines.append(f"🎁 Реферальная скидка: <b>{discount_percent}%</b> на первую оплату")
         promo = get_active_promo_for_student_id(student_id)
         if promo:
             _, code, dtype, dvalue, _ = promo
             unit = "%" if dtype == "percent" else "₽"
-            lines.append(f"   • 🎟 Активный промокод: <b>{code}</b> (скидка {int(dvalue)}{unit})")
+            lines.append(f"🎟 Промокод: <b>{code}</b> (−{int(float(dvalue))}{unit})")
 
+    # --- Направления ---
+    lines.append("")
     if directions:
-        lines.extend(["", "<b>📚 Ваши направления</b>"])
-        for index, direction in enumerate(directions, start=1):
+        lines.append("<b>📚 Направления</b>")
+        for direction in directions:
             _, teacher_name, subject_name, lesson_balance, tariff_type = direction
             if lesson_balance < 0:
-                balance_view = f"долг <b>{-lesson_balance}</b> ⚠️"
+                bal = f"долг {-lesson_balance} ⚠️"
             else:
-                balance_view = f"остаток <b>{lesson_balance}</b>"
-            lines.append(
-                f"   {index}. <b>{subject_name}</b> — {teacher_name}\n"
-                f"       {balance_view} • {format_tariff_type(tariff_type)}"
-            )
+                bal = f"{lesson_balance} зан."
+            lines.append(f"• <b>{subject_name}</b> ({teacher_name}): {bal}")
     else:
-        lines.extend(
-            [
-                "",
-                "<b>📚 Ваши направления</b>",
-                "   Активные направления пока не назначены.",
-            ]
-        )
+        lines.append("📚 Направления не назначены.")
 
+    # --- Посещаемость (компактно) ---
     if student_id is not None and directions:
-        attendance_rows = get_attendance_summary_for_student(student_id)
-        if any(row["total"] > 0 for row in attendance_rows):
-            lines.extend(["", "<b>🎓 Посещаемость</b>"])
-            for row in attendance_rows:
-                if row["total"] == 0:
-                    continue
-                last_seen = row["last_lesson_date"]
-                last_seen_view = (last_seen or "—")[:10] if last_seen else "—"
-                lines.append(
-                    f"   • <b>{row['subject_name']}</b> — {row['teacher_name']}\n"
-                    f"       посещено: <b>{row['attended']}</b>"
-                    f" • пропуски: <b>{row['missed']}</b>"
-                    f" • последнее: {last_seen_view}"
-                )
-
-        recent = get_recent_attendance_for_student(student_id, limit=5)
+        recent = get_recent_attendance_for_student(student_id, limit=3)
         if recent:
-            lines.extend(["", "<b>🗓 Последние занятия</b>"])
+            lines.append("")
+            lines.append("<b>🗓 Последние занятия</b>")
             for entry in recent:
                 date_view = (entry["lesson_date"] or "—")[:10]
                 lines.append(
-                    f"   • {date_view} — {entry['subject_name']} ({entry['teacher_name']}): "
+                    f"• {date_view} {entry['subject_name']}: "
                     f"{_format_attendance_status(entry['status'])}"
                 )
 
-    lines.extend(["", "<b>💳 Последние оплаты</b>"])
-    payments_block = build_recent_payments_text(recent_payments)
-    payments_lines = payments_block.splitlines()
-    # `build_recent_payments_text` already prefixes its own header that we
-    # don't need here — drop it but keep the body.
-    if payments_lines and payments_lines[0].startswith("<b>Последние оплаты"):
-        payments_lines = payments_lines[1:]
-    if not payments_lines:
-        lines.append("   История оплат пока отсутствует.")
-    else:
-        for line in payments_lines:
-            lines.append(f"   {line}" if line else line)
+    # --- Оплаты (компактно) ---
+    if recent_payments:
+        lines.append("")
+        lines.append("<b>💳 Последние оплаты</b>")
+        for payment in recent_payments[:3]:
+            payment_id, status, caption_text, created_at, _, lessons_added = payment
+            date_view = str(created_at)[:10] if created_at else "—"
+            status_label = format_payment_status(status)
+            lessons_str = f" +{lessons_added}" if lessons_added else ""
+            lines.append(f"• #{payment_id} {date_view}: {status_label}{lessons_str}")
 
-    admin_text = build_admin_contacts_text()
-    if admin_text:
-        lines.extend(["", admin_text])
-
-    lines.extend(
-        [
-            "",
-            "<i>Если в данных есть ошибка — напишите администратору.</i>",
-        ]
-    )
     return "\n".join(lines)
 
 
