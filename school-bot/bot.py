@@ -9,7 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher
-from aiogram.types import BotCommand, MenuButtonCommands
+from aiogram.types import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonCommands
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT_DIR))
@@ -97,8 +97,11 @@ async def debt_reminder_worker(bot: Bot):
                 lines.append("")
                 lines.append("❗❗❗ Пожалуйста, внесите оплату или свяжитесь с администратором школы. ❗❗❗")
 
+                debt_kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="💳 Погасить долг", callback_data="debt_pay_start")],
+                ])
                 try:
-                    await bot.send_message(telegram_id, "\n".join(lines))
+                    await bot.send_message(telegram_id, "\n".join(lines), reply_markup=debt_kb)
                 except Exception as exc:
                     logger.warning("Debt reminder send failed for %s: %s", telegram_id, exc)
                     continue

@@ -122,48 +122,41 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
     positive = sum(d[3] for d in directions if d[3] > 0)
     debt = sum(-d[3] for d in directions if d[3] < 0)
 
-    lines = [
-        "╔══════════════════════════╗",
-        "  👤 ЛИЧНЫЙ КАБИНЕТ",
-        "╚══════════════════════════╝",
-        "",
-        f"👋 {student_name}",
-        "",
-        "📊 Сводка",
-        f"   • Занятий на балансе: {positive}",
-    ]
+    lines = [f"👤 {student_name}", ""]
+
     if debt > 0:
-        lines.append(f"   • Задолженность: {debt} занятий ⚠️")
+        lines.append(f"🔴 Долг: {debt} зан.   |   ✅ Баланс: {positive} зан.")
     else:
-        lines.append("   • Задолженность: нет ✅")
+        lines.append(f"✅ Баланс: {positive} зан.")
+
     if student_id is not None:
         promo = get_active_promo_for_student_id(student_id)
         if promo:
             _, code, dtype, dvalue, _ = promo
             unit = "%" if dtype == "percent" else "₽"
-            lines.append(f"   • 🎟 Активный промокод: {code} (скидка {int(dvalue)}{unit})")
+            lines.append(f"🎟 Промокод {code} — скидка {int(dvalue)}{unit}")
 
     if directions:
-        lines.extend(["", "📚 Ваши направления"])
-        for i, d in enumerate(directions, 1):
-            _, teacher, subject, balance, tariff = d
-            bal_view = f"долг {-balance} ⚠️" if balance < 0 else f"остаток {balance}"
-            lines.append(f"   {i}. {subject} — {teacher}: {bal_view}")
+        lines.extend(["", "📚 Направления"])
+        for d in directions:
+            _, teacher, subject, balance, _ = d
+            if balance < 0:
+                bal_view = f"⚠️ долг {-balance} зан."
+            elif balance == 0:
+                bal_view = "0 зан."
+            else:
+                bal_view = f"{balance} зан."
+            lines.append(f"  • {subject} ({teacher}) — {bal_view}")
     else:
-        lines.extend(["", "📚 Ваши направления", "   Активные направления пока не назначены."])
+        lines.extend(["", "📚 Направления ещё не назначены."])
 
-    lines.extend(["", "💳 Последние оплаты"])
-    if not payments:
-        lines.append("   История оплат пока отсутствует.")
-    else:
-        for p in payments:
-            pid, status, caption, created_at, _, lessons = p
-            lines.append(
-                f"   • Оплата #{pid} — {_format_payment_status(status)}\n"
-                f"     Дата: {created_at[:10]}  Начислено: {lessons}"
-            )
+    if payments:
+        lines.extend(["", "💳 Последние оплаты"])
+        for p in payments[:2]:
+            pid, status, _, created_at, _, lessons = p
+            lessons_str = f" (+{lessons} зан.)" if lessons else ""
+            lines.append(f"  • #{pid} {created_at[:10]}: {_format_payment_status(status)}{lessons_str}")
 
-    lines.extend(["", "Написать администратору: https://t.me/integral_school_ru"])
     return "\n".join(lines)
 
 
@@ -677,8 +670,9 @@ async def _dispatch_callback(
         student_id, student_name, telegram_id, _ = students[0]
         directions = get_student_directions(student_id)
         payments = get_recent_payment_history_by_max_user(user_id, limit=4)
+        has_debt = any(d[3] < 0 for d in directions)
         text = _build_cabinet_text(student_name, directions, payments, student_id=student_id)
-        await _reply(api, user_id, message_id, text, cabinet_kb(tg_linked=bool(telegram_id)))
+        await _reply(api, user_id, message_id, text, cabinet_kb(tg_linked=bool(telegram_id), has_debt=has_debt))
         return
 
     if payload == "enter_promo":
@@ -699,6 +693,22 @@ async def _dispatch_callback(
             return
         set_max_fsm_state(user_id, ENTER_PROMO, data)
         await _reply(api, user_id, message_id, "🎟 Введите промокод:\n\nНапишите код в следующем сообщении.")
+        return
+
+    if payload == "show_referral_code":
+        referral_link = f"https://t.me/integral_school_ru_bot?start=ref_{user_id}"
+        text = (
+            "🎁 ВАШ РЕФЕРАЛЬНЫЙ КОД\n\n"
+            f"Ваша персональная ссылка:\n{referral_link}\n\n"
+            "━━━━━━━━━━━━━━━━━\n"
+            "📌 Как это работает:\n"
+            "1️⃣ Отправьте ссылку другу\n"
+            "2️⃣ Друг регистрируется и проходит бесплатную диагностику\n"
+            "3️⃣ При первой оплате друг получает скидку 20%\n"
+            "4️⃣ Вам начисляется +1 занятие в подарок\n\n"
+            "Количество рефералов не ограничено — приглашайте всех! 🚀"
+        )
+        await _reply(api, user_id, message_id, text, back_menu_kb())
         return
 
     if payload == "link_tg":
@@ -725,7 +735,7 @@ async def _dispatch_callback(
         )
         return
 
-    if payload == "menu_paid":
+    if payload in ("menu_paid", "debt_pay_start"):
         students = find_students_by_max_id(user_id)
         if not students:
             await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе. Обратитесь к администратору.")
@@ -748,9 +758,14 @@ async def _dispatch_callback(
             promo = get_active_promo_for_max_user(user_id)
             promo_hint = ""
             if promo:
-                _, code, dtype, dvalue, _ = promo
+                _, code, dtype, dvalue, applies_to_packages = promo
                 unit = "%" if dtype == "percent" else "₽"
-                scope = "на оплату 1 занятия" if dtype == "percent" else "на занятия и пакеты"
+                if dtype == "percent":
+                    scope = "на разовые занятия"
+                elif dtype == "fixed_rub" and applies_to_packages:
+                    scope = "на занятия и пакеты"
+                else:
+                    scope = "на разовые занятия"
                 promo_hint = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) ({scope})"
             text = f"Выберите вариант оплаты:{promo_hint}"
             kb = keyboard(
@@ -844,9 +859,10 @@ async def _dispatch_callback(
         promo = get_active_promo_for_max_user(user_id)
         promo_note = ""
         if promo:
-            _, code, dtype, dvalue, _ = promo
-            unit = "%" if dtype == "percent" else "₽"
-            promo_note = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) применяется к пакетам."
+            _, code, dtype, dvalue, applies_to_packages = promo
+            if applies_to_packages:
+                unit = "%" if dtype == "percent" else "₽"
+                promo_note = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) применяется к пакетам."
         set_max_fsm_state(user_id, PACKAGE_SELECTION, data)
         await _reply(
             api, user_id, message_id,
@@ -912,9 +928,14 @@ async def _dispatch_callback(
         promo = get_active_promo_for_max_user(user_id)
         promo_hint = ""
         if promo:
-            _, code, dtype, dvalue, _ = promo
+            _, code, dtype, dvalue, applies_to_packages = promo
             unit = "%" if dtype == "percent" else "₽"
-            scope = "на оплату 1 занятия" if dtype == "percent" else "на занятия и пакеты"
+            if dtype == "percent":
+                scope = "на разовые занятия"
+            elif dtype == "fixed_rub" and applies_to_packages:
+                scope = "на занятия и пакеты"
+            else:
+                scope = "на разовые занятия"
             promo_hint = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) ({scope})"
         set_max_fsm_state(user_id, PAYMENT_TYPE_CHOICE, data)
         await _reply(

@@ -131,8 +131,10 @@ async def debt_reminder_worker(api: MaxApiClient) -> None:
                         )
                     lines += ["", "❗❗❗ Пожалуйста, внесите оплату или свяжитесь с администратором школы. ❗❗❗"]
 
+                    from shared.max_api import btn, keyboard as max_kb
+                    debt_kb = max_kb([btn("💳 Погасить долг", "debt_pay_start")])
                     try:
-                        await api.send_message(max_id, "\n".join(lines))
+                        await api.send_message(max_id, "\n".join(lines), attachments=debt_kb)
                     except Exception as exc:
                         logger.warning("MAX debt reminder failed for %s: %s", max_id, exc)
                         continue

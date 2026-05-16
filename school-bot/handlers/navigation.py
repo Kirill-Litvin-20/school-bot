@@ -15,6 +15,7 @@ from keyboards import (
     get_cabinet_keyboard,
     get_faq_menu_keyboard,
     get_faq_back_keyboard,
+    get_user_type_keyboard,
 )
 from shared.database import get_teacher_catalog_subjects
 from shared.database import (
@@ -166,7 +167,10 @@ async def start_handler(message: Message, state: FSMContext):
         await message.answer(
             "Здравствуйте!\n\n"
             "Пожалуйста, отправьте фото или скриншот чека об оплате.\n\n"
-            "После проверки оплаты мы сообщим результат."
+            "После проверки оплаты мы сообщим результат.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+            ]),
         )
         await state.set_state(ApplicationForm.payment_proof)
         return
@@ -280,12 +284,13 @@ async def menu_cabinet(callback: CallbackQuery, state: FSMContext):
             callback.from_user.id,
             limit=4,
         )
+        has_debt = any(d[3] < 0 for d in directions)
         text = build_cabinet_text(student_name, directions, recent_payments, student_id=student_id)
         text += build_multi_students_warning(len(students))
         try:
-            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard())
+            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard(has_debt))
         except Exception:
-            await callback.message.answer(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard())
+            await callback.message.answer(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard(has_debt))
     except Exception:
         logger.exception("menu_cabinet failed for user %s", callback.from_user.id)
         await callback.answer(
@@ -423,20 +428,27 @@ async def get_photo_id(message: Message):
 async def show_referral_code(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     referral_link = f"https://t.me/integral_school_ru_bot?start=ref_{telegram_id}"
+    share_text = "Занимайся с лучшими репетиторами! Запишись через мою ссылку и получи скидку на первое занятие 🎓"
+    share_url = f"https://t.me/share/url?url={referral_link}&text={share_text}"
     text = (
         "🎁 <b>ВАШ РЕФЕРАЛЬНЫЙ КОД</b>\n\n"
-        f"<a href=\"{referral_link}\">{referral_link}</a>\n\n"
-        "Друг переходит → диагностика → первая оплата со <b>скидкой 20%</b> → вам <b>+1 занятие</b>."
+        f"Ваша персональная ссылка:\n{referral_link}\n\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        "📌 <b>Как это работает:</b>\n"
+        "1️⃣ Отправьте ссылку другу\n"
+        "2️⃣ Друг регистрируется и проходит бесплатную диагностику\n"
+        "3️⃣ При первой оплате друг получает <b>скидку 20%</b>\n"
+        "4️⃣ Вам начисляется <b>+1 занятие</b> в подарок\n\n"
+        "Количество рефералов не ограничено — приглашайте всех! 🚀"
     )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Поделиться ссылкой", url=share_url)],
+        [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+    ])
     try:
-        await callback.message.edit_text(
-            text, parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
-            ]),
-        )
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     except Exception:
-        await callback.message.answer(text, parse_mode="HTML")
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
@@ -492,18 +504,18 @@ async def show_first_package(callback: CallbackQuery):
 
 @router.callback_query(lambda c: c.data.startswith("apply_offer_"))
 async def apply_offer(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(ApplicationForm.menu)
-    # Redirect to signup flow via menu_signup
     await state.set_state(ApplicationForm.user_type)
     try:
         await callback.message.edit_text(
-            "👤 Кто оставляет заявку?\n\nНапишите: <b>ученик</b> или <b>родитель</b>.",
+            "👤 <b>Кто оставляет заявку?</b>\n\nВыберите вариант:",
             parse_mode="HTML",
+            reply_markup=get_user_type_keyboard(),
         )
     except Exception:
         await callback.message.answer(
-            "👤 Кто оставляет заявку?\n\nНапишите: <b>ученик</b> или <b>родитель</b>.",
+            "👤 <b>Кто оставляет заявку?</b>\n\nВыберите вариант:",
             parse_mode="HTML",
+            reply_markup=get_user_type_keyboard(),
         )
     await callback.answer()
 

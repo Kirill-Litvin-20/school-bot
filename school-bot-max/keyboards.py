@@ -49,10 +49,11 @@ def main_menu_kb() -> list[dict]:
     )
 
 
-def cabinet_kb(tg_linked: bool = False) -> list[dict]:
+def cabinet_kb(tg_linked: bool = False, has_debt: bool = False) -> list[dict]:
+    pay_text = "💸 Погасить долг" if has_debt else "💳 Оплатить занятия"
     rows = [
-        [btn("💳 Оплатить занятия", "menu_paid")],
-        [btn("🎟 Ввести промокод", "enter_promo")],
+        [btn(pay_text, "menu_paid")],
+        [btn("🎟 Промокод", "enter_promo"), btn("🎁 Реферальный код", "show_referral_code")],
         [btn_url("✉️ Написать администратору", "https://t.me/integral_school_ru")],
     ]
     if tg_linked:
@@ -182,11 +183,13 @@ def _fmt_price(p: int) -> str:
 
 
 def package_selection_kb(packages: dict, promo=None) -> list[dict]:
-    """packages: {lessons: price}, promo: tuple or None"""
+    """packages: {lessons: price}, promo: tuple (id,code,dtype,dvalue,applies_to_packages) or None"""
     promo_dtype = promo_dvalue = None
     if promo:
-        _, _, promo_dtype, promo_dvalue, _ = promo
+        _, _, promo_dtype, promo_dvalue, applies_to_packages = promo
         promo_dvalue = float(promo_dvalue)
+        if not applies_to_packages:
+            promo_dtype = promo_dvalue = None
 
     rows = []
     for lessons, price in sorted(packages.items()):

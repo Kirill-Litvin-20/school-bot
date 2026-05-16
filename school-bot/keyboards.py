@@ -344,12 +344,14 @@ def _fmt_price(p: int) -> str:
 
 
 def get_package_selection_keyboard(packages: dict, promo=None) -> InlineKeyboardMarkup:
-    """packages: {lessons: price}, promo: tuple (id,code,dtype,dvalue,expires) or None"""
+    """packages: {lessons: price}, promo: tuple (id,code,dtype,dvalue,applies_to_packages) or None"""
     buttons = []
     promo_dtype = promo_dvalue = None
     if promo:
-        _, _, promo_dtype, promo_dvalue, _ = promo
+        _, _, promo_dtype, promo_dvalue, applies_to_packages = promo
         promo_dvalue = float(promo_dvalue)
+        if not applies_to_packages:
+            promo_dtype = promo_dvalue = None
 
     for lessons, price in sorted(packages.items()):
         if promo_dtype == "fixed_rub":
@@ -366,14 +368,19 @@ def get_package_selection_keyboard(packages: dict, promo=None) -> InlineKeyboard
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_cabinet_keyboard():
+def get_cabinet_keyboard(has_debt: bool = False):
     """Клавиатура для личного кабинета ученика"""
+    pay_text = "💸 Погасить долг" if has_debt else "💳 Оплатить занятия"
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплатить занятия", callback_data="menu_paid")],
-            [InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")],
-            [InlineKeyboardButton(text="✉️ Написать администратору", url="https://t.me/integral_school_ru")],
-            [InlineKeyboardButton(text="🎁 Мой реферальный код", callback_data="show_referral_code")],
+            [InlineKeyboardButton(text=pay_text, callback_data="menu_paid")],
+            [
+                InlineKeyboardButton(text="🎟 Промокод", callback_data="enter_promo"),
+                InlineKeyboardButton(text="🎁 Реферальный код", callback_data="show_referral_code"),
+            ],
+            [
+                InlineKeyboardButton(text="✉️ Написать администратору", url="https://t.me/integral_school_ru"),
+            ],
             [InlineKeyboardButton(text="🔗 Подключить MAX", callback_data="link_max_start")],
             [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
         ]

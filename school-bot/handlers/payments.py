@@ -80,8 +80,9 @@ def _can_manage_payments(callback: CallbackQuery) -> bool:
 def _calc_price_block(payment_type: str, promo, debt_lessons: int = 0) -> str:
     """Return a text block with price calculation, or empty string if unknown."""
     dtype = dvalue = None
+    applies_to_packages = False
     if promo:
-        _, _, dtype, dvalue, _ = promo
+        _, _, dtype, dvalue, applies_to_packages = promo
         dvalue = float(dvalue)
 
     if payment_type == "single" and LESSON_PRICE:
@@ -97,10 +98,10 @@ def _calc_price_block(payment_type: str, promo, debt_lessons: int = 0) -> str:
 
     if payment_type == "package" and debt_lessons > 0:
         base = debt_lessons  # debt_lessons reused as package_price for packages
-        if dtype == "fixed_rub":
+        if applies_to_packages and dtype == "fixed_rub":
             after = max(0, base - int(dvalue))
             return f"\n💵 Стоимость пакета: {base}₽\n🎟 Скидка по промокоду: -{int(dvalue)}₽\n✅ <b>К оплате: {after}₽</b>\n"
-        elif dtype == "percent":
+        elif applies_to_packages and dtype == "percent":
             after = int(base * (1 - dvalue / 100))
             return f"\n💵 Стоимость пакета: {base}₽\n🎟 Скидка по промокоду: -{int(dvalue)}%\n✅ <b>К оплате: {after}₽</b>\n"
         else:
@@ -146,6 +147,13 @@ def _build_payment_type_kb(has_debt: bool) -> InlineKeyboardMarkup:
     ])
 
 
+@router.callback_query(lambda c: c.data == "debt_pay_start")
+async def debt_pay_start(callback: CallbackQuery, state: FSMContext):
+    """Triggered from debt-reminder notification, works from any state."""
+    await state.set_state(ApplicationForm.menu)
+    await menu_paid(callback, state)
+
+
 @router.callback_query(ApplicationForm.menu, lambda c: c.data == "menu_paid")
 async def menu_paid(callback: CallbackQuery, state: FSMContext):
     if not _is_private_chat(callback.message):
@@ -168,12 +176,15 @@ async def menu_paid(callback: CallbackQuery, state: FSMContext):
     promo = get_active_promo_for_user(callback.from_user.id)
     promo_hint = ""
     if promo and not debt_directions:
-        _, code, dtype, dvalue, _ = promo
+        _, code, dtype, dvalue, applies_to_packages = promo
         unit = "%" if dtype == "percent" else "₽"
-        scope = "на оплату 1 занятия" if dtype == "percent" else "на занятия и пакеты" if dtype == "fixed_rub" else ""
-        promo_hint = f"\n\nАктивная скидка: промокод <b>{code}</b> (-{int(float(dvalue))}{unit})"
-        if scope:
-            promo_hint += f" ({scope})"
+        if dtype == "percent":
+            scope = "на разовые занятия"
+        elif dtype == "fixed_rub" and applies_to_packages:
+            scope = "на занятия и пакеты"
+        else:
+            scope = "на разовые занятия"
+        promo_hint = f"\n\nАктивная скидка: промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) ({scope})"
 
     if debt_directions:
         debt_lines = "\n".join(
@@ -220,21 +231,21 @@ async def _show_payment_details(
 
     promo_block = ""
     if promo and payment_type != "debt":
-        _, code, dtype, dvalue, _ = promo
+        _, code, dtype, dvalue, applies_to_packages = promo
         unit = "%" if dtype == "percent" else "₽"
         if payment_type == "single" and LESSON_PRICE:
             promo_block = f"\n🎟 Применён промокод <b>{code}</b> ({int(float(dvalue))}{unit})\n"
-        elif payment_type == "package" and dtype == "fixed_rub":
+        elif payment_type == "package" and applies_to_packages:
             promo_block = f"\n🎟 Применён промокод <b>{code}</b>: скидка {int(float(dvalue))}{unit}\n"
-        elif payment_type == "package" and dtype == "percent":
-            promo_block = f"\n🎟 Применён промокод <b>{code}</b>: скидка {int(float(dvalue))}{unit}\n"
-        elif dtype == "fixed_rub":
-            promo_block = f"\n🎟 <b>Промокод {code}: скидка {int(float(dvalue))}{unit}</b> применится к этому платежу.\n"
-        else:
+        elif payment_type == "package" and not applies_to_packages:
             promo_block = (
                 f"\n🎟 Промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) "
                 "не применяется к пакетам занятий.\n"
             )
+        elif dtype == "fixed_rub":
+            promo_block = f"\n🎟 <b>Промокод {code}: скидка {int(float(dvalue))}{unit}</b> применится к этому платежу.\n"
+        else:
+            promo_block = f"\n🎟 Промокод <b>{code}</b> (-{int(float(dvalue))}{unit})\n"
 
     # For packages, pass package_price via debt_lessons slot
     price_block = _calc_price_block(payment_type, promo, package_price if payment_type == "package" else debt_lessons)
@@ -298,11 +309,10 @@ async def pay_package(callback: CallbackQuery, state: FSMContext):
     promo = get_active_promo_for_user(callback.from_user.id)
     promo_note = ""
     if promo:
-        _, code, dtype, dvalue, _ = promo
-        unit = "%" if dtype == "percent" else "₽"
-        promo_note = f"\n🎟 Промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) применяется к пакетам."
-    else:
-        promo_note = ""
+        _, code, dtype, dvalue, applies_to_packages = promo
+        if applies_to_packages:
+            unit = "%" if dtype == "percent" else "₽"
+            promo_note = f"\n🎟 Промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) применяется к пакетам."
 
     text = f"📦 <b>Выбор пакета</b>{promo_note}\n\nВыберите количество занятий:"
     kb = get_package_selection_keyboard(PACKAGE_PRICES, promo)
@@ -334,9 +344,14 @@ async def package_back_to_type(callback: CallbackQuery, state: FSMContext):
     promo = get_active_promo_for_user(callback.from_user.id)
     promo_hint = ""
     if promo:
-        _, code, dtype, dvalue, _ = promo
+        _, code, dtype, dvalue, applies_to_packages = promo
         unit = "%" if dtype == "percent" else "₽"
-        scope = "на оплату 1 занятия" if dtype == "percent" else "на занятия и пакеты"
+        if dtype == "percent":
+            scope = "на разовые занятия"
+        elif applies_to_packages:
+            scope = "на занятия и пакеты"
+        else:
+            scope = "на разовые занятия"
         promo_hint = f"\n\nАктивная скидка: промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) ({scope})"
     text = f"Выберите вариант оплаты:{promo_hint}"
     await state.set_state(ApplicationForm.payment_type_choice)
@@ -365,12 +380,22 @@ async def get_payment_proof(message: Message, state: FSMContext):
         file_name = (doc.file_name or "").lower()
         mime_type = (doc.mime_type or "").lower()
         if mime_type != "application/pdf" and not file_name.endswith(".pdf"):
-            await message.answer("❓ Пожалуйста, отправьте PDF-файл чека.")
+            await message.answer(
+                "❓ Пожалуйста, отправьте PDF-файл чека.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+                ]),
+            )
             return
         file_id = doc.file_id
         file_type = "pdf"
     else:
-        await message.answer("❓ Пожалуйста, отправьте фото или PDF-файл чека.")
+        await message.answer(
+            "❓ Пожалуйста, отправьте фото или PDF-файл чека.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+            ]),
+        )
         return
 
     payment_request_id = create_payment_request(

@@ -2295,6 +2295,10 @@ def finalize_payment_with_topup(
                     "UPDATE promo_codes SET used_count = used_count + 1 WHERE id = ?",
                     (promo_row[0],)
                 )
+                cur.execute(
+                    "DELETE FROM student_promo_codes WHERE student_id = ? AND promo_code_id = ?",
+                    (payer_row[0], promo_row[0]),
+                )
 
         conn.commit()
         return True

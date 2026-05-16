@@ -13,6 +13,7 @@ from keyboards import (
     get_subjects_keyboard,
     get_teacher_choice_keyboard,
     get_teachers_keyboard,
+    get_user_type_keyboard,
 )
 from states import ApplicationForm
 
@@ -36,7 +37,8 @@ async def menu_signup(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ApplicationForm.user_type)
     await flow_edit(
         callback, state,
-        "👤 Кто оставляет заявку?\n\nНапишите: <b>ученик</b> или <b>родитель</b>.",
+        "👤 <b>Кто оставляет заявку?</b>\n\nВыберите вариант:",
+        reply_markup=get_user_type_keyboard(),
         parse_mode="HTML",
     )
     await callback.answer()
