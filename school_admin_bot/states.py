@@ -57,6 +57,7 @@ class AdminStates(StatesGroup):
 
     waiting_promo_code_text = State()
     waiting_promo_discount_value = State()
+    waiting_promo_applies_to = State()
     waiting_promo_valid_until = State()
     waiting_promo_max_uses = State()
     waiting_promo_assign_student = State()

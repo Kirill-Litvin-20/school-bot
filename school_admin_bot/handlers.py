@@ -136,8 +136,12 @@ from shared.database import (
     create_promo_code,
     assign_promo_to_student,
     list_promo_codes,
+    list_archived_promo_codes,
     get_promo_code_by_id,
     deactivate_promo_code,
+    archive_promo_code,
+    archive_expired_promo_codes,
+    archive_all_promo_codes,
 )
 from shared.sheets import get_sheets_client
 from shared.database import (
@@ -171,6 +175,13 @@ async def _update_summary_sheets_bg() -> None:
             logger.info("Sheets: %s refreshed", label)
         except Exception as exc:
             logger.warning("Sheets: %s refresh failed: %s", label, exc)
+    try:
+        promos = await asyncio.to_thread(list_promo_codes)
+        archived = await asyncio.to_thread(list_archived_promo_codes)
+        await asyncio.to_thread(client.update_promos_sheet, promos, archived)
+        logger.info("Sheets: Промокоды refreshed")
+    except Exception as exc:
+        logger.warning("Sheets: Промокоды refresh failed: %s", exc)
 
 
 async def _sync_attendance_to_sheets(
@@ -3131,6 +3142,15 @@ async def _do_sheets_refresh(message) -> None:
         except Exception as exc:
             logger.warning("Sheets refresh %s failed: %s", label, exc)
             results.append(f"❌ {label}: ошибка")
+    # Promo codes sheet
+    try:
+        promos = await asyncio.to_thread(list_promo_codes)
+        archived = await asyncio.to_thread(list_archived_promo_codes)
+        ok = await asyncio.to_thread(client.update_promos_sheet, promos, archived)
+        results.append(f"{'✅' if ok else '⚠️'} Промокоды")
+    except Exception as exc:
+        logger.warning("Sheets refresh Промокоды failed: %s", exc)
+        results.append("❌ Промокоды: ошибка")
     await message.answer(
         "📊 <b>Таблица обновлена:</b>\n" + "\n".join(results),
         parse_mode="HTML",
@@ -4846,13 +4866,91 @@ def _fmt_promo_list(promos: list[dict]) -> str:
 @router.callback_query(lambda c: c.data == "admin_promo_list")
 async def admin_promo_list(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    promos = list_promo_codes()
+    archived_count = await asyncio.to_thread(archive_expired_promo_codes)
+    promos = await asyncio.to_thread(list_promo_codes)
+    expired_note = f"\n<i>Архивировано просроченных: {archived_count}</i>" if archived_count else ""
+    text = f"🎟 <b>Промокоды</b>{expired_note}\n\n{_fmt_promo_list(promos)}"
+    rows = [[InlineKeyboardButton(text="➕ Создать промокод", callback_data="admin_promo_create")]]
+    if promos:
+        rows.append([
+            InlineKeyboardButton(text="🗑 Удалить все в архив", callback_data="admin_promo_archive_all"),
+        ])
+        for p in promos:
+            rows.append([InlineKeyboardButton(
+                text=f"❌ {p['code']}", callback_data=f"admin_promo_del_{p['id']}"
+            )])
+    archived_total = await asyncio.to_thread(lambda: len(list_archived_promo_codes()))
+    if archived_total:
+        rows.append([InlineKeyboardButton(
+            text=f"🗄 Архив ({archived_total})", callback_data="admin_promo_archive_view"
+        )])
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data="admin_section_finance")])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("admin_promo_del_"))
+async def admin_promo_delete(callback: CallbackQuery, state: FSMContext):
+    promo_id = int(callback.data.split("admin_promo_del_")[1])
+    promo = await asyncio.to_thread(get_promo_code_by_id, promo_id)
+    if not promo:
+        await callback.answer("Промокод не найден.", show_alert=True)
+        return
+    await asyncio.to_thread(archive_promo_code, promo_id)
+    await callback.answer(f"Промокод {promo['code']} перемещён в архив.", show_alert=False)
+    # Refresh the list
+    archived_count = await asyncio.to_thread(archive_expired_promo_codes)
+    promos = await asyncio.to_thread(list_promo_codes)
+    expired_note = f"\n<i>Архивировано просроченных: {archived_count}</i>" if archived_count else ""
+    text = f"🎟 <b>Промокоды</b>{expired_note}\n\n{_fmt_promo_list(promos)}"
+    rows = [[InlineKeyboardButton(text="➕ Создать промокод", callback_data="admin_promo_create")]]
+    if promos:
+        rows.append([InlineKeyboardButton(text="🗑 Удалить все в архив", callback_data="admin_promo_archive_all")])
+        for p in promos:
+            rows.append([InlineKeyboardButton(text=f"❌ {p['code']}", callback_data=f"admin_promo_del_{p['id']}")])
+    archived_total = await asyncio.to_thread(lambda: len(list_archived_promo_codes()))
+    if archived_total:
+        rows.append([InlineKeyboardButton(text=f"🗄 Архив ({archived_total})", callback_data="admin_promo_archive_view")])
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data="admin_section_finance")])
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    except Exception:
+        pass
+
+
+@router.callback_query(lambda c: c.data == "admin_promo_archive_all")
+async def admin_promo_archive_all(callback: CallbackQuery, state: FSMContext):
+    count = await asyncio.to_thread(archive_all_promo_codes)
+    await callback.answer(f"Перемещено в архив: {count} промокодов.", show_alert=True)
+    # Refresh
+    promos = await asyncio.to_thread(list_promo_codes)
     text = f"🎟 <b>Промокоды</b>\n\n{_fmt_promo_list(promos)}"
+    rows = [[InlineKeyboardButton(text="➕ Создать промокод", callback_data="admin_promo_create")]]
+    archived_total = await asyncio.to_thread(lambda: len(list_archived_promo_codes()))
+    if archived_total:
+        rows.append([InlineKeyboardButton(text=f"🗄 Архив ({archived_total})", callback_data="admin_promo_archive_view")])
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data="admin_section_finance")])
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    except Exception:
+        pass
+
+
+@router.callback_query(lambda c: c.data == "admin_promo_archive_view")
+async def admin_promo_archive_view(callback: CallbackQuery, state: FSMContext):
+    promos = await asyncio.to_thread(list_archived_promo_codes)
+    text = f"🗄 <b>Архив промокодов</b>\n\n{_fmt_promo_list(promos) if promos else 'Архив пуст.'}"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Создать промокод", callback_data="admin_promo_create")],
-        [InlineKeyboardButton(text="← Назад", callback_data="admin_section_finance")],
+        [InlineKeyboardButton(text="← К промокодам", callback_data="admin_promo_list")],
     ])
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
 
@@ -4912,8 +5010,50 @@ async def admin_promo_discount_value(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("Введите положительное число (например: 20 или 500).")
         return
+    data = await state.get_data()
+    dtype = data.get("promo_type", "percent")
     await state.update_data(promo_value=val)
-    await message.answer(
+
+    if dtype == "percent":
+        # % promo always applies only to single lessons — no choice needed
+        await state.update_data(promo_applies_to="single")
+        await message.answer(
+            "ℹ️ Процентная скидка применяется <b>только к разовым занятиям</b> — к пакетам не применяется.\n\n"
+            "Введите срок действия промокода — дату и время истечения.\n\n"
+            "Формат: <code>31.12.2026 23:59</code>\n"
+            "Или введите <code>нет</code> — промокод будет бессрочным.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Бессрочный", callback_data="promo_until_none")
+            ]]),
+        )
+        await state.set_state(AdminStates.waiting_promo_valid_until)
+    else:
+        # fixed_rub — let admin choose what it applies to
+        await message.answer(
+            "На что распространяется эта скидка?\n\n"
+            "❗ Выбранное применение будет видно ученику в боте.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✨ Только разовые занятия", callback_data="promo_applies_single")],
+                [InlineKeyboardButton(text="📦 Только пакеты", callback_data="promo_applies_packages")],
+                [InlineKeyboardButton(text="✅ Разовые и пакеты", callback_data="promo_applies_both")],
+            ]),
+        )
+        await state.set_state(AdminStates.waiting_promo_applies_to)
+
+
+@router.callback_query(AdminStates.waiting_promo_applies_to, lambda c: c.data.startswith("promo_applies_"))
+async def admin_promo_applies_to(callback: CallbackQuery, state: FSMContext):
+    applies_map = {
+        "promo_applies_single": "single",
+        "promo_applies_packages": "packages",
+        "promo_applies_both": "both",
+    }
+    applies = applies_map.get(callback.data, "single")
+    await state.update_data(promo_applies_to=applies)
+    labels = {"single": "только разовые занятия", "packages": "только пакеты", "both": "разовые занятия и пакеты"}
+    await callback.message.edit_text(
+        f"Применяется к: <b>{labels[applies]}</b>\n\n"
         "Введите срок действия промокода — дату и время истечения.\n\n"
         "Формат: <code>31.12.2026 23:59</code>\n"
         "Или введите <code>нет</code> — промокод будет бессрочным.",
@@ -4923,6 +5063,7 @@ async def admin_promo_discount_value(message: Message, state: FSMContext):
         ]]),
     )
     await state.set_state(AdminStates.waiting_promo_valid_until)
+    await callback.answer()
 
 
 @router.callback_query(lambda c: c.data == "promo_until_none")
@@ -5052,9 +5193,14 @@ async def _finalize_promo(msg, state: FSMContext, student_id: int | None, edit: 
     value = float(data.get("promo_value", 0))
     until = data.get("promo_until")
     max_uses = data.get("promo_max_uses")
+    applies_to = data.get("promo_applies_to", "single")
     await state.clear()
 
-    promo_id = await asyncio.to_thread(create_promo_code, code, dtype, value, until, max_uses)
+    # applies_to_packages=True only when explicitly set to "packages" or "both"
+    applies_to_packages = applies_to in ("packages", "both")
+    promo_id = await asyncio.to_thread(
+        create_promo_code, code, dtype, value, until, max_uses, applies_to_packages
+    )
     if promo_id is None:
         text = f"❌ Промокод <code>{code}</code> уже существует."
         if edit:
@@ -5074,11 +5220,14 @@ async def _finalize_promo(msg, state: FSMContext, student_id: int | None, edit: 
     val_str = int(value) if value == int(value) else value
     until_str = f"до {until}" if until else "бессрочно"
     uses_str = f"макс. {max_uses} использований" if max_uses else "без ограничений"
+    applies_labels = {"single": "только разовые занятия", "packages": "только пакеты", "both": "разовые занятия и пакеты"}
+    applies_str = applies_labels.get(applies_to, "только разовые занятия")
 
     text = (
         f"✅ <b>Промокод создан</b>\n\n"
         f"Код: <code>{code}</code>\n"
         f"Скидка: {val_str}{unit}\n"
+        f"Применяется: {applies_str}\n"
         f"Действует: {until_str}\n"
         f"Использований: {uses_str}"
         f"{assigned_name}"

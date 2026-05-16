@@ -38,6 +38,10 @@ _REVENUE_SHEET  = "Выручка"
 _REVENUE_HEADER = ["Период", "Тип", "Занятий", "Выручка (1500₽)", "Хозяину (500₽)", "Преподам (1000₽)"]
 _C_REVENUE_HEADER = {"red": 0.027, "green": 0.408, "blue": 0.392}  # dark teal
 
+_PROMO_SHEET  = "Промокоды"
+_PROMO_HEADER = ["Код", "Тип скидки", "Размер скидки", "Применяется к", "Действует до", "Макс. использований", "Использован раз", "Назначен ученикам", "Статус", "Создан"]
+_C_PROMO_HEADER = {"red": 0.506, "green": 0.149, "blue": 0.639}  # purple
+
 # ── Display maps ───────────────────────────────────────────────────────────────
 _STATUS_LABELS = {"present": "Был", "absent": "Не был", "cancelled": "Отменено"}
 _TARIFF_LABELS = {"package": "Пакет", "per_lesson": "Поурочно", "subscription": "Абонемент"}
@@ -829,6 +833,60 @@ class SheetsClient:
             return True
         except Exception as exc:
             logger.error("Sheets cancel failed: %s", exc)
+            return False
+
+
+    def update_promos_sheet(self, promos: list[dict], archived: list[dict] | None = None) -> bool:
+        """Rewrite the «Промокоды» sheet with active (and optionally archived) promo codes."""
+        if not self.is_configured():
+            return False
+        gc = self._get_client()
+        if gc is None:
+            return False
+        try:
+            sp = gc.open_by_key(self._spreadsheet_id)
+            ws = self._get_or_add_worksheet(sp, _PROMO_SHEET, cols=len(_PROMO_HEADER))
+            ws.clear()
+            ws.append_row(_PROMO_HEADER, value_input_option="USER_ENTERED")
+
+            def _row(p: dict, archived_flag: bool = False) -> list:
+                dtype_label = "%" if p["discount_type"] == "percent" else "₽"
+                val = int(p["discount_value"]) if p["discount_value"] == int(p["discount_value"]) else p["discount_value"]
+                applies = "Разовые и пакеты" if p.get("applies_to_packages") else "Только разовые"
+                until = p.get("valid_until") or "Бессрочно"
+                max_u = str(p["max_uses"]) if p["max_uses"] else "∞"
+                used = str(p["used_count"])
+                assigned = str(p["assigned_count"])
+                if archived_flag:
+                    status = "🗄 Архив"
+                elif p["active"]:
+                    status = "✅ Активен"
+                else:
+                    status = "❌ Неактивен"
+                created = p.get("created_at", "")
+                return [p["code"], dtype_label, f"{val}{dtype_label}", applies, until, max_u, used, assigned, status, created]
+
+            rows = [_row(p) for p in promos]
+            if archived:
+                if promos:
+                    rows.append(["--- АРХИВ ---"] + [""] * (len(_PROMO_HEADER) - 1))
+                rows.extend(_row(p, archived_flag=True) for p in archived)
+
+            if rows:
+                ws.append_rows(rows, value_input_option="USER_ENTERED")
+
+            # Basic header formatting
+            try:
+                sheet_id = ws.id
+                self._batch_format(sp, [
+                    self._header_format_request(sheet_id, len(_PROMO_HEADER), _C_PROMO_HEADER),
+                    self._freeze_request(sheet_id, rows=1),
+                ])
+            except Exception:
+                pass
+            return True
+        except Exception as exc:
+            logger.error("Sheets update_promos_sheet failed: %s", exc)
             return False
 
 

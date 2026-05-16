@@ -860,9 +860,9 @@ async def _dispatch_callback(
         promo_note = ""
         if promo:
             _, code, dtype, dvalue, applies_to_packages = promo
-            if applies_to_packages:
-                unit = "%" if dtype == "percent" else "₽"
-                promo_note = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) применяется к пакетам."
+            # % promo never applies to packages
+            if applies_to_packages and dtype == "fixed_rub":
+                promo_note = f"\n🎟 Промокод {code} (-{int(float(dvalue))}₽) применяется к пакетам."
         set_max_fsm_state(user_id, PACKAGE_SELECTION, data)
         await _reply(
             api, user_id, message_id,
@@ -888,21 +888,18 @@ async def _dispatch_callback(
         promo = get_active_promo_for_max_user(user_id)
         payment_type_label = f"📦 Пакет {lessons} занятий"
 
-        # Price calculation
+        # Price calculation; % promo never applies to packages
         price_block = f"\n💵 Стоимость пакета: {price}₽\n"
         promo_block = ""
         if promo:
-            _, code, dtype, dvalue, _ = promo
+            _, code, dtype, dvalue, applies_to_packages = promo
             dvalue_f = float(dvalue)
-            unit = "%" if dtype == "percent" else "₽"
-            if dtype == "fixed_rub":
+            if dtype == "fixed_rub" and applies_to_packages:
                 after = max(0, price - int(dvalue_f))
                 price_block = f"\n💵 Стоимость пакета: {price}₽\n🎟 Скидка: -{int(dvalue_f)}₽\n✅ К оплате: {after}₽\n"
-                promo_block = f"\n🎟 Применён промокод {code} ({int(dvalue_f)}{unit})\n"
-            elif dtype == "percent":
-                after = int(price * (1 - dvalue_f / 100))
-                price_block = f"\n💵 Стоимость пакета: {price}₽\n🎟 Скидка: -{int(dvalue_f)}%\n✅ К оплате: {after}₽\n"
-                promo_block = f"\n🎟 Применён промокод {code} ({int(dvalue_f)}{unit})\n"
+                promo_block = f"\n🎟 Применён промокод {code} (-{int(dvalue_f)}₽)\n"
+            elif dtype == "percent" or not applies_to_packages:
+                promo_block = f"\n🎟 Промокод {code} не применяется к пакетам занятий.\n"
 
         data["payment_type_label"] = payment_type_label
         set_max_fsm_state(user_id, PAYMENT_PROOF, data)

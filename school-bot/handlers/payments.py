@@ -98,12 +98,10 @@ def _calc_price_block(payment_type: str, promo, debt_lessons: int = 0) -> str:
 
     if payment_type == "package" and debt_lessons > 0:
         base = debt_lessons  # debt_lessons reused as package_price for packages
+        # % promo never applies to packages; only fixed_rub with applies_to_packages=True
         if applies_to_packages and dtype == "fixed_rub":
             after = max(0, base - int(dvalue))
             return f"\n💵 Стоимость пакета: {base}₽\n🎟 Скидка по промокоду: -{int(dvalue)}₽\n✅ <b>К оплате: {after}₽</b>\n"
-        elif applies_to_packages and dtype == "percent":
-            after = int(base * (1 - dvalue / 100))
-            return f"\n💵 Стоимость пакета: {base}₽\n🎟 Скидка по промокоду: -{int(dvalue)}%\n✅ <b>К оплате: {after}₽</b>\n"
         else:
             return f"\n💵 <b>Стоимость пакета: {base}₽</b>\n"
 
@@ -235,9 +233,10 @@ async def _show_payment_details(
         unit = "%" if dtype == "percent" else "₽"
         if payment_type == "single" and LESSON_PRICE:
             promo_block = f"\n🎟 Применён промокод <b>{code}</b> ({int(float(dvalue))}{unit})\n"
-        elif payment_type == "package" and applies_to_packages:
+        elif payment_type == "package" and applies_to_packages and dtype == "fixed_rub":
             promo_block = f"\n🎟 Применён промокод <b>{code}</b>: скидка {int(float(dvalue))}{unit}\n"
-        elif payment_type == "package" and not applies_to_packages:
+        elif payment_type == "package":
+            # % promo and non-package fixed_rub don't apply to packages
             promo_block = (
                 f"\n🎟 Промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) "
                 "не применяется к пакетам занятий.\n"
@@ -310,9 +309,9 @@ async def pay_package(callback: CallbackQuery, state: FSMContext):
     promo_note = ""
     if promo:
         _, code, dtype, dvalue, applies_to_packages = promo
-        if applies_to_packages:
-            unit = "%" if dtype == "percent" else "₽"
-            promo_note = f"\n🎟 Промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) применяется к пакетам."
+        # % promo never applies to packages
+        if applies_to_packages and dtype == "fixed_rub":
+            promo_note = f"\n🎟 Промокод <b>{code}</b> (-{int(float(dvalue))}₽) применяется к пакетам."
 
     text = f"📦 <b>Выбор пакета</b>{promo_note}\n\nВыберите количество занятий:"
     kb = get_package_selection_keyboard(PACKAGE_PRICES, promo)

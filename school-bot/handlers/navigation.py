@@ -191,14 +191,15 @@ async def menu_command_handler(message: Message, state: FSMContext):
 )
 async def choose_user_type(callback: CallbackQuery, state: FSMContext):
     user_type_map = {"user_student": "Ученик", "user_parent": "Родитель"}
-
     await state.update_data(user_type=user_type_map[callback.data])
-
-    await callback.message.answer(
-        "Благодарим. Теперь, пожалуйста, выберите раздел:",
-        reply_markup=get_main_menu_keyboard(),
-    )
-    await state.set_state(ApplicationForm.menu)
+    await state.set_state(ApplicationForm.name)
+    try:
+        await callback.message.edit_text(
+            "👤 Как к вам обращаться? Напишите имя.",
+            reply_markup=None,
+        )
+    except Exception:
+        await callback.message.answer("👤 Как к вам обращаться? Напишите имя.")
     await callback.answer()
 
 
@@ -261,6 +262,10 @@ async def menu_reviews(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
     await send_review_card(callback.message, 0, state)
     await state.set_state(ApplicationForm.review_card)
     await callback.answer()
@@ -330,6 +335,10 @@ async def choose_teacher_subject(callback: CallbackQuery, state: FSMContext):
         )
         return
 
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
     await send_teacher_card(callback.message, subject, 0, state)
     await state.set_state(ApplicationForm.teacher_card)
     await callback.answer()

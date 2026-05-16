@@ -593,6 +593,8 @@ def _ensure_promo_codes_columns(cur):
             cur.execute("ALTER TABLE promo_codes ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
         if "created_at" not in existing:
             cur.execute("ALTER TABLE promo_codes ADD COLUMN created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP")
+        if "archived" not in existing:
+            cur.execute("ALTER TABLE promo_codes ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
         # Make created_by and created_at nullable (old schema had them NOT NULL without defaults)
         cur.execute("""
             SELECT is_nullable FROM information_schema.columns
@@ -609,11 +611,15 @@ def _ensure_promo_codes_columns(cur):
         if row and (row[0] == "NO" or not row[1]):
             cur.execute("ALTER TABLE promo_codes ALTER COLUMN created_at DROP NOT NULL")
             cur.execute("ALTER TABLE promo_codes ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP")
+        if "archived" not in existing:
+            cur.execute("ALTER TABLE promo_codes ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
     else:
         cur.execute("PRAGMA table_info(promo_codes)")
         existing = {row[1] for row in cur.fetchall()}
         if "applies_to_packages" not in existing:
             cur.execute("ALTER TABLE promo_codes ADD COLUMN applies_to_packages INTEGER NOT NULL DEFAULT 0")
+        if "archived" not in existing:
+            cur.execute("ALTER TABLE promo_codes ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
 
 
 def _ensure_teachers_table_columns(cur: sqlite3.Cursor):
@@ -5405,6 +5411,7 @@ def create_promo_code(
     discount_value: float,
     valid_until: str | None = None,
     max_uses: int | None = None,
+    applies_to_packages: bool = False,
 ) -> int | None:
     """Create a new promo code. Returns the new id, or None if code already exists."""
     conn = get_connection()
@@ -5412,10 +5419,10 @@ def create_promo_code(
     try:
         cur.execute(
             """
-            INSERT INTO promo_codes (code, discount_type, discount_value, valid_until, max_uses, active)
-            VALUES (?, ?, ?, ?, ?, 1)
+            INSERT INTO promo_codes (code, discount_type, discount_value, valid_until, max_uses, active, applies_to_packages)
+            VALUES (?, ?, ?, ?, ?, 1, ?)
             """,
-            (code.upper().strip(), discount_type, discount_value, valid_until, max_uses),
+            (code.upper().strip(), discount_type, discount_value, valid_until, max_uses, 1 if applies_to_packages else 0),
         )
         conn.commit()
         row_id = cur.lastrowid
@@ -5487,31 +5494,111 @@ def assign_promo_to_student(student_id: int, promo_code_id: int) -> bool:
         return False
 
 
+def _promo_rows_to_dicts(rows) -> list[dict]:
+    return [
+        {
+            "id": r[0], "code": r[1], "discount_type": r[2], "discount_value": r[3],
+            "valid_until": r[4], "max_uses": r[5], "used_count": r[6],
+            "active": r[7], "assigned_count": r[8], "applies_to_packages": bool(r[9]),
+            "created_at": r[10] if len(r) > 10 else "",
+        }
+        for r in rows
+    ]
+
+
 def list_promo_codes() -> list[dict]:
-    """Return all promo codes ordered by created_at desc."""
+    """Return non-archived promo codes ordered by id desc."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
         """
         SELECT pc.id, pc.code, pc.discount_type, pc.discount_value,
                pc.valid_until, pc.max_uses, pc.used_count, pc.active,
-               COUNT(spc.student_id) AS assigned_count
+               COUNT(spc.student_id) AS assigned_count,
+               COALESCE(pc.applies_to_packages, 0),
+               pc.created_at
         FROM promo_codes pc
         LEFT JOIN student_promo_codes spc ON spc.promo_code_id = pc.id
+        WHERE COALESCE(pc.archived, 0) = 0
         GROUP BY pc.id
         ORDER BY pc.id DESC
         """
     )
     rows = cur.fetchall()
     conn.close()
-    return [
-        {
-            "id": r[0], "code": r[1], "discount_type": r[2], "discount_value": r[3],
-            "valid_until": r[4], "max_uses": r[5], "used_count": r[6],
-            "active": r[7], "assigned_count": r[8],
-        }
-        for r in rows
-    ]
+    return _promo_rows_to_dicts(rows)
+
+
+def list_archived_promo_codes() -> list[dict]:
+    """Return archived promo codes ordered by id desc."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT pc.id, pc.code, pc.discount_type, pc.discount_value,
+               pc.valid_until, pc.max_uses, pc.used_count, pc.active,
+               COUNT(spc.student_id) AS assigned_count,
+               COALESCE(pc.applies_to_packages, 0),
+               pc.created_at
+        FROM promo_codes pc
+        LEFT JOIN student_promo_codes spc ON spc.promo_code_id = pc.id
+        WHERE COALESCE(pc.archived, 0) = 1
+        GROUP BY pc.id
+        ORDER BY pc.id DESC
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return _promo_rows_to_dicts(rows)
+
+
+def archive_promo_code(promo_id: int) -> bool:
+    """Archive (soft-delete) a promo code."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("UPDATE promo_codes SET archived = 1, active = 0 WHERE id = ?", (promo_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def archive_expired_promo_codes() -> int:
+    """Archive all active promos whose valid_until has passed. Returns count archived."""
+    conn = get_connection()
+    cur = conn.cursor()
+    if USE_POSTGRES:
+        cur.execute(
+            """
+            UPDATE promo_codes SET archived = 1, active = 0
+            WHERE COALESCE(archived, 0) = 0 AND valid_until IS NOT NULL
+              AND valid_until < NOW()::text
+            """
+        )
+    else:
+        cur.execute(
+            """
+            UPDATE promo_codes SET archived = 1, active = 0
+            WHERE COALESCE(archived, 0) = 0 AND valid_until IS NOT NULL
+              AND valid_until < datetime('now')
+            """
+        )
+    count = cur.rowcount
+    conn.commit()
+    conn.close()
+    return count
+
+
+def archive_all_promo_codes() -> int:
+    """Archive all non-archived promo codes. Returns count archived."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE promo_codes SET archived = 1, active = 0 WHERE COALESCE(archived, 0) = 0"
+    )
+    count = cur.rowcount
+    conn.commit()
+    conn.close()
+    return count
 
 
 def get_promo_code_by_id(promo_id: int) -> dict | None:
