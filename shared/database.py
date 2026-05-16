@@ -5172,6 +5172,7 @@ def create_payment_request_max(
     caption_text: str | None,
     file_id: str,
     file_type: str,
+    promo_code_id_used: int | None = None,
 ) -> int:
     """Create a payment request originating from MAX messenger."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -5184,9 +5185,10 @@ def create_payment_request_max(
         INSERT INTO payment_requests (
             telegram_user_id, telegram_username, telegram_full_name,
             caption_text, file_id, file_type, status,
-            source_platform, max_user_id, created_at, updated_at
+            source_platform, max_user_id, created_at, updated_at,
+            promo_code_id_used
         )
-        VALUES (NULL, ?, ?, ?, ?, ?, 'pending', 'max', ?, ?, ?)
+        VALUES (NULL, ?, ?, ?, ?, ?, 'pending', 'max', ?, ?, ?, ?)
         """,
         (
             display_username,
@@ -5197,6 +5199,7 @@ def create_payment_request_max(
             max_user_id,
             now,
             now,
+            promo_code_id_used,
         ),
     )
     payment_request_id = cur.lastrowid

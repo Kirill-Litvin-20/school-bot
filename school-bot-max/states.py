@@ -24,3 +24,7 @@ PAYMENT_PROOF = "payment_proof"
 
 # Promo code entry
 ENTER_PROMO = "enter_promo"
+
+# Direction choice (multiple directions)
+DIRECTION_CHOICE = "direction_choice"
+DEBT_DIRECTION_CHOICE = "debt_direction_choice"

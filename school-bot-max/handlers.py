@@ -10,8 +10,10 @@ from __future__ import annotations
 import logging
 import re
 import sys
+import time
 from io import BytesIO
 from pathlib import Path
+from uuid import uuid4
 
 from aiogram import Bot as TelegramBot
 from aiogram.types import BufferedInputFile
@@ -44,6 +46,7 @@ from keyboards import (
     main_menu_kb,
     offers_kb,
     package_selection_kb,
+    review_card_kb,
     subjects_kb,
     teacher_card_kb,
     teacher_choice_kb,
@@ -55,12 +58,16 @@ from shared.database import (
     apply_promo_code_for_student,
     clear_max_fsm_state,
     consume_account_link_code,
+    create_account_link_code,
     create_payment_request_max,
     find_students_by_max_id,
     find_students_by_telegram_id,
+    get_active_invitee_discount_percent,
     get_active_promo_for_max_user,
     get_active_promo_for_student_id,
+    get_active_review_cards,
     get_max_fsm_state,
+    get_recent_attendance_for_student,
     get_recent_payment_history_by_max_user,
     get_student_directions,
     get_teacher_catalog_name_subject_pairs,
@@ -81,6 +88,8 @@ from states import (
     APP_TEACHER_CHOICE,
     APP_TEACHER_NAME,
     APP_USER_TYPE,
+    DEBT_DIRECTION_CHOICE,
+    DIRECTION_CHOICE,
     ENTER_PROMO,
     LINK_CODE,
     LINK_PHONE,
@@ -118,6 +127,17 @@ def _format_payment_status(status: str) -> str:
     }.get(status, status)
 
 
+def _format_attendance_status(status: str) -> str:
+    return {
+        "present": "✅ был",
+        "completed": "✅ был",
+        "absent": "❌ пропуск",
+        "missed": "❌ пропуск",
+        "skipped": "❌ пропуск",
+        "cancelled": "↩️ отменено",
+    }.get(status, status or "—")
+
+
 def _build_cabinet_text(student_name: str, directions: list, payments: list, student_id: int | None = None) -> str:
     positive = sum(d[3] for d in directions if d[3] > 0)
     debt = sum(-d[3] for d in directions if d[3] < 0)
@@ -137,6 +157,9 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
     else:
         lines.append("   • Задолженность: нет ✅")
     if student_id is not None:
+        discount_percent = get_active_invitee_discount_percent(student_id)
+        if discount_percent:
+            lines.append(f"   • 🎁 Реферальная скидка: {discount_percent}% на первую оплату")
         promo = get_active_promo_for_student_id(student_id)
         if promo:
             _, code, dtype, dvalue, _ = promo
@@ -151,6 +174,17 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
             lines.append(f"   {i}. {subject} — {teacher}: {bal_view}")
     else:
         lines.extend(["", "📚 Ваши направления", "   Активные направления пока не назначены."])
+
+    if student_id is not None and directions:
+        recent = get_recent_attendance_for_student(student_id, limit=3)
+        if recent:
+            lines.extend(["", "🗓 Последние занятия"])
+            for entry in recent:
+                date_view = (entry["lesson_date"] or "—")[:10]
+                lines.append(
+                    f"   • {date_view} {entry['subject_name']}: "
+                    f"{_format_attendance_status(entry['status'])}"
+                )
 
     lines.extend(["", "💳 Последние оплаты"])
     if not payments:
@@ -238,6 +272,73 @@ async def _send_teacher_card(
         except Exception as exc:
             logger.warning("Teacher photo send failed %s: %s", photo_url, exc)
     await _reply(api, user_id, message_id, text, kb)
+
+
+async def _ensure_review_local_path(card: dict) -> str | None:
+    """Return local path for a review photo, downloading from Telegram if needed."""
+    local = (card.get("media_local_path") or "").strip()
+    if local:
+        return local
+    file_id = card.get("media_file_id")
+    review_id = card.get("id")
+    if not file_id or not review_id:
+        return None
+    try:
+        reviews_dir = ROOT_DIR / "assets" / "reviews"
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"review_{int(time.time())}_{uuid4().hex[:8]}.jpg"
+        target_path = reviews_dir / filename
+        tg_bot = TelegramBot(token=TG_BOT_TOKEN)
+        tg_file = await tg_bot.get_file(file_id)
+        await tg_bot.download_file(tg_file.file_path, destination=target_path)
+        await tg_bot.session.close()
+        if target_path.exists():
+            local_path = f"assets/reviews/{filename}"
+            from shared.database import get_connection
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute("UPDATE review_cards SET media_local_path = ? WHERE id = ?", (local_path, review_id))
+            conn.commit()
+            conn.close()
+            card["media_local_path"] = local_path
+            return local_path
+    except Exception as exc:
+        logger.warning("Failed to download review photo file_id=%s: %s", file_id, exc)
+    return None
+
+
+async def _send_review_card(
+    api: MaxApiClient,
+    user_id: int,
+    message_id: str | None,
+    cards: list[dict],
+    index: int,
+) -> None:
+    card = cards[index]
+    total = len(cards)
+    links = card.get("links") or []
+    links_text = "\n".join(f"{pos}. {link}" for pos, link in enumerate(links, start=1))
+    caption = f"Отзыв {index + 1} из {total}\n\n{card.get('description', '')}".strip()
+    if links_text:
+        caption = f"{caption}\n\nСсылки:\n{links_text}"
+    kb = review_card_kb(index, total)
+    media_type = card.get("media_type")
+    if media_type in ("photo", "image"):
+        local = await _ensure_review_local_path(card)
+        if local:
+            photo_url = f"{_SERVER_BASE_URL}/{local}"
+            if message_id:
+                try:
+                    await api.edit_message(message_id, caption, [{"type": "image", "payload": {"url": photo_url}}] + kb)
+                    return
+                except Exception:
+                    await api.delete_message(message_id)
+            try:
+                await api.send_photo_url(user_id, photo_url, caption=caption, attachments=kb)
+                return
+            except Exception as exc:
+                logger.warning("Review photo send failed %s: %s", photo_url, exc)
+    await _reply(api, user_id, message_id, caption, kb)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -519,6 +620,29 @@ async def _handle_link_code(
         )
 
 
+async def _show_debt_payment_max(
+    api: MaxApiClient, user_id: int, message_id: str | None,
+    data: dict, direction_id: int, debt_lessons: int,
+):
+    """Show debt payment details screen for MAX."""
+    price_block = ""
+    if LESSON_PRICE and debt_lessons > 0:
+        base = LESSON_PRICE * debt_lessons
+        price_block = f"\n💵 Сумма долга: {debt_lessons} × {LESSON_PRICE}₽ = {base}₽\n"
+    await _reply(
+        api, user_id, message_id,
+        f"💰 Тип оплаты: 💸 Погашение долга"
+        f"{price_block}\n"
+        f"💳 РЕКВИЗИТЫ ДЛЯ ОПЛАТЫ\n\n"
+        f"🏦 Номер счёта: {PAYMENT_BANK_NUMBER}\n"
+        f"🏢 Банк: {PAYMENT_BANK_NAME}\n"
+        f"👤 Владелец: {PAYMENT_ACCOUNT_HOLDER}\n\n"
+        "📝 В комментарии к переводу укажите имя ученика.\n\n"
+        "📸 После оплаты отправьте фото или PDF-файл чека в этот чат.",
+        keyboard([btn("← В меню", "back_to_menu")]),
+    )
+
+
 async def _process_payment_file(
     api: MaxApiClient,
     user_id: int,
@@ -540,6 +664,17 @@ async def _process_payment_file(
         ext = "pdf" if file_type == "pdf" else "jpg"
         input_file = BufferedInputFile(file_bytes, filename=f"receipt.{ext}")
 
+        state, fsm_data = get_max_fsm_state(user_id)
+        fsm_data = fsm_data or {}
+        payment_type_label = fsm_data.get("payment_type_label", "")
+        payment_type = fsm_data.get("payment_type", "")
+        skip_promo = fsm_data.get("skip_promo", False)
+
+        # Determine if promo was actually applied
+        promo = get_active_promo_for_max_user(user_id)
+        promo_applied = promo if (promo and not skip_promo and payment_type != "pay_debt") else None
+        promo_code_id_used = promo_applied[0] if promo_applied else None
+
         payment_request_id = create_payment_request_max(
             max_user_id=user_id,
             max_username=username,
@@ -547,14 +682,12 @@ async def _process_payment_file(
             caption_text=caption,
             file_id="pending",
             file_type=file_type,
+            promo_code_id_used=promo_code_id_used,
         )
 
-        state, fsm_data = get_max_fsm_state(user_id)
-        payment_type_label = (fsm_data or {}).get("payment_type_label", "")
-        promo = get_active_promo_for_max_user(user_id)
         promo_line = ""
-        if promo:
-            _, code, dtype, dvalue, _ = promo
+        if promo_applied:
+            _, code, dtype, dvalue, _ = promo_applied
             unit = "%" if dtype == "percent" else "₽"
             promo_line = f"\n🎟 Промокод: {code} (-{int(dvalue)}{unit})"
         username_line = f"🔗 Username: @{username}" if username else "🔗 Username: не указан"
@@ -728,38 +861,64 @@ async def _dispatch_callback(
     if payload == "menu_paid":
         students = find_students_by_max_id(user_id)
         if not students:
-            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе. Обратитесь к администратору.")
+            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе.")
             return
         student_id = students[0][0]
         directions = get_student_directions(student_id)
-        debt_directions = [(d[1], d[2], d[3]) for d in directions if d[3] < 0]
+        if not directions:
+            await _reply(api, user_id, message_id, "❌ У вас нет направлений для оплаты.")
+            return
+        debt_directions = [d for d in directions if d[3] < 0]
         if debt_directions:
-            debt_lines = "\n".join(
-                f"• {subj} — {teacher}: долг {abs(bal)} занят{'ие' if abs(bal) == 1 else 'ия' if 2 <= abs(bal) <= 4 else 'ий'}"
-                for teacher, subj, bal in debt_directions
-            )
-            text = (
-                "⚠️ У вас есть задолженность по занятиям:\n\n"
-                f"{debt_lines}\n\n"
-                "Для погашения долга переведите нужную сумму и отправьте чек."
-            )
-            kb = keyboard([btn("💸 Погасить долг", "pay_debt")], [btn("← В меню", "back_to_menu")])
-        else:
-            promo = get_active_promo_for_max_user(user_id)
-            promo_hint = ""
-            if promo:
-                _, code, dtype, dvalue, _ = promo
-                unit = "%" if dtype == "percent" else "₽"
-                scope = "на оплату 1 занятия" if dtype == "percent" else "на занятия и пакеты"
-                promo_hint = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) ({scope})"
-            text = f"Выберите вариант оплаты:{promo_hint}"
-            kb = keyboard(
-                [btn("✨ Оплатить одно занятие", "pay_single")],
-                [btn("📦 Выбрать пакет", "pay_package")],
-                [btn("← В меню", "back_to_menu")],
-            )
+            # Go to debt payment directly
+            if len(debt_directions) == 1:
+                d = debt_directions[0]
+                data["selected_direction_id"] = d[0]
+                data["skip_promo"] = False
+                set_max_fsm_state(user_id, PAYMENT_PROOF, data)
+                await _show_debt_payment_max(api, user_id, message_id, data, d[0], abs(d[3]))
+            else:
+                data["selected_direction_id"] = None
+                data["skip_promo"] = False
+                set_max_fsm_state(user_id, DEBT_DIRECTION_CHOICE, data)
+                rows = []
+                for d in debt_directions:
+                    direction_id, teacher_name, subject_name, lesson_balance, _ = d
+                    debt_count = abs(lesson_balance)
+                    suffix = 'ие' if debt_count == 1 else 'ия' if 2 <= debt_count <= 4 else 'ий'
+                    rows.append([btn(f"📚 {subject_name} — {teacher_name} (долг {debt_count} занят{suffix})", f"debt_dir_{direction_id}")])
+                rows.append([btn("← В меню", "back_to_menu")])
+                await _reply(api, user_id, message_id, "💸 По какому направлению погасить долг?", keyboard(*rows))
+            return
+        # No debt — direction picker if multiple
+        if len(directions) > 1:
+            data["selected_direction_id"] = None
+            data["skip_promo"] = False
+            set_max_fsm_state(user_id, DIRECTION_CHOICE, data)
+            rows = []
+            for d in directions:
+                direction_id, teacher_name, subject_name, lesson_balance, _ = d
+                bal_str = f" (долг {abs(lesson_balance)} зан.)" if lesson_balance < 0 else f" ({lesson_balance} зан.)"
+                rows.append([btn(f"📚 {subject_name} — {teacher_name}{bal_str}", f"dir_{direction_id}")])
+            rows.append([btn("← В меню", "back_to_menu")])
+            await _reply(api, user_id, message_id, "📚 Выберите направление для оплаты:", keyboard(*rows))
+            return
+        # Single direction
+        data["selected_direction_id"] = directions[0][0]
+        data["skip_promo"] = False
         set_max_fsm_state(user_id, PAYMENT_TYPE_CHOICE, data)
-        await _reply(api, user_id, message_id, text, kb)
+        promo = get_active_promo_for_max_user(user_id)
+        promo_hint = ""
+        if promo:
+            _, code, dtype, dvalue, atp = promo
+            unit = "%" if dtype == "percent" else "₽"
+            scope_map = {0: "разовые занятия", 1: "пакеты занятий", 2: "разовые и пакеты"}
+            promo_hint = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) — {scope_map.get(int(atp or 0), 'занятия')}"
+        await _reply(api, user_id, message_id, f"Выберите вариант оплаты:{promo_hint}", keyboard(
+            [btn("✨ Оплатить одно занятие", "pay_single")],
+            [btn("📦 Выбрать пакет", "pay_package")],
+            [btn("← В меню", "back_to_menu")],
+        ))
         return
 
     if payload in ("pay_debt", "pay_single"):
@@ -768,20 +927,26 @@ async def _dispatch_callback(
             await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе.")
             return
         student_id = students[0][0]
+        selected_direction_id = data.get("selected_direction_id")
+        skip_promo = data.get("skip_promo", False)
         type_labels = {
             "pay_debt": "💸 Погашение долга",
             "pay_single": "✨ Разовое занятие",
         }
         payment_type_label = type_labels[payload]
-        promo = get_active_promo_for_max_user(user_id)
+        promo = None if skip_promo else get_active_promo_for_max_user(user_id)
 
         price_block = ""
         if LESSON_PRICE:
             if payload == "pay_single":
                 dtype_p = dvalue_p = None
                 if promo:
-                    _, _, dtype_p, dvalue_p, _ = promo
+                    _, _, dtype_p, dvalue_p, atp = promo
                     dvalue_p = float(dvalue_p)
+                    applies_to_pkg = int(atp or 0) in (1, 2)
+                    if applies_to_pkg:
+                        promo = None  # package-only promo, don't apply to single
+                        dtype_p = None
                 base = LESSON_PRICE
                 if dtype_p == "fixed_rub":
                     after = max(0, base - int(dvalue_p))
@@ -793,7 +958,11 @@ async def _dispatch_callback(
                     price_block = f"\n💵 Стоимость: {base}₽\n"
             elif payload == "pay_debt":
                 directions = get_student_directions(student_id)
-                debt_lessons = sum(abs(d[3]) for d in directions if d[3] < 0)
+                if selected_direction_id:
+                    debt_dir = next((d for d in directions if d[0] == selected_direction_id and d[3] < 0), None)
+                    debt_lessons = abs(debt_dir[3]) if debt_dir else 0
+                else:
+                    debt_lessons = sum(abs(d[3]) for d in directions if d[3] < 0)
                 if debt_lessons > 0:
                     base = LESSON_PRICE * debt_lessons
                     price_block = f"\n💵 Сумма долга: {debt_lessons} × {LESSON_PRICE}₽ = {base}₽\n"
@@ -804,9 +973,24 @@ async def _dispatch_callback(
             unit = "%" if dtype == "percent" else "₽"
             promo_block = f"\n🎟 Применён промокод {code} ({int(float(dvalue))}{unit})\n"
 
+        active_promo = get_active_promo_for_max_user(user_id)
+        has_promo = bool(active_promo) and payload != "pay_debt"
+        if has_promo and not skip_promo:
+            payment_kb = keyboard(
+                [btn("🚫 Оплатить без промокода", "pay_skip_promo")],
+                [btn("← В меню", "back_to_menu")],
+            )
+        elif not active_promo and not skip_promo and payload != "pay_debt":
+            payment_kb = keyboard(
+                [btn("🎟 Ввести промокод", "enter_promo")],
+                [btn("← В меню", "back_to_menu")],
+            )
+        else:
+            payment_kb = keyboard([btn("← В меню", "back_to_menu")])
+
+        data["payment_type"] = payload
         data["payment_type_label"] = payment_type_label
         set_max_fsm_state(user_id, PAYMENT_PROOF, data)
-        payment_kb = None if (promo or payload == "pay_debt") else keyboard([btn("🎟 Ввести промокод", "enter_promo")])
         await _reply(
             api, user_id, message_id,
             f"💰 Тип оплаты: {payment_type_label}"
@@ -820,6 +1004,58 @@ async def _dispatch_callback(
             "📸 После оплаты отправьте фото или PDF-файл чека в этот чат.",
             payment_kb,
         )
+        return
+
+    if payload.startswith("dir_") and state == DIRECTION_CHOICE:
+        try:
+            direction_id = int(payload.split("dir_", 1)[1])
+        except (ValueError, IndexError):
+            await _reply(api, user_id, message_id, "Ошибка выбора направления.")
+            return
+        data["selected_direction_id"] = direction_id
+        data["skip_promo"] = False
+        set_max_fsm_state(user_id, PAYMENT_TYPE_CHOICE, data)
+        promo = get_active_promo_for_max_user(user_id)
+        promo_hint = ""
+        if promo:
+            _, code, dtype, dvalue, atp = promo
+            unit = "%" if dtype == "percent" else "₽"
+            scope_map = {0: "разовые занятия", 1: "пакеты занятий", 2: "разовые и пакеты"}
+            promo_hint = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) — {scope_map.get(int(atp or 0), 'занятия')}"
+        await _reply(api, user_id, message_id, f"Выберите вариант оплаты:{promo_hint}", keyboard(
+            [btn("✨ Оплатить одно занятие", "pay_single")],
+            [btn("📦 Выбрать пакет", "pay_package")],
+            [btn("← В меню", "back_to_menu")],
+        ))
+        return
+
+    if payload.startswith("debt_dir_") and state == DEBT_DIRECTION_CHOICE:
+        try:
+            direction_id = int(payload.split("debt_dir_", 1)[1])
+        except (ValueError, IndexError):
+            await _reply(api, user_id, message_id, "Ошибка выбора направления.")
+            return
+        students = find_students_by_max_id(user_id)
+        if not students:
+            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы.")
+            return
+        directions = get_student_directions(students[0][0])
+        debt_dir = next((d for d in directions if d[0] == direction_id and d[3] < 0), None)
+        if not debt_dir:
+            await _reply(api, user_id, message_id, "❌ Направление не найдено или долга нет.")
+            return
+        data["selected_direction_id"] = direction_id
+        data["skip_promo"] = False
+        set_max_fsm_state(user_id, PAYMENT_PROOF, data)
+        await _show_debt_payment_max(api, user_id, message_id, data, direction_id, abs(debt_dir[3]))
+        return
+
+    if payload == "pay_skip_promo" and state == PAYMENT_PROOF:
+        data["skip_promo"] = True
+        payment_type = data.get("payment_type", "pay_single")
+        set_max_fsm_state(user_id, PAYMENT_PROOF, data)
+        # Re-dispatch to re-render payment details without promo
+        await _dispatch_callback(api, callback_id, user_id, username, name, payment_type, PAYMENT_TYPE_CHOICE, data, message_id)
         return
 
     if payload == "pay_package":
@@ -844,9 +1080,14 @@ async def _dispatch_callback(
         promo = get_active_promo_for_max_user(user_id)
         promo_note = ""
         if promo:
-            _, code, dtype, dvalue, _ = promo
+            _, code, dtype, dvalue, applies_to_packages = promo
             unit = "%" if dtype == "percent" else "₽"
-            promo_note = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) применяется к пакетам."
+            applies_to_pkg = int(applies_to_packages or 0) in (1, 2)
+            if applies_to_pkg:
+                promo_note = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) применяется к пакетам."
+            else:
+                promo_note = f"\n🎟 Промокод {code} не применяется к пакетам."
+                promo = None  # don't apply discount in keyboard prices
         set_max_fsm_state(user_id, PACKAGE_SELECTION, data)
         await _reply(
             api, user_id, message_id,
@@ -1158,6 +1399,88 @@ async def _dispatch_callback(
         else:  # Звонок
             set_max_fsm_state(user_id, APP_CONTACT_VALUE, data)
             await _reply(api, user_id, message_id, "📞 Введите номер телефона для звонка (например: +79001234567):", back_kb())
+        return
+
+    if payload == "menu_reviews":
+        cards = [c for c in get_active_review_cards(limit=200) if (c.get("description") or "").strip()]
+        if not cards:
+            await _reply(api, user_id, message_id, "Отзывы пока не добавлены.", back_menu_kb())
+            return
+        data["review_index"] = 0
+        set_max_fsm_state(user_id, MENU, data)
+        await _send_review_card(api, user_id, message_id, cards, 0)
+        return
+
+    if payload in ("review_prev", "review_next"):
+        cards = [c for c in get_active_review_cards(limit=200) if (c.get("description") or "").strip()]
+        if not cards:
+            await _show_menu(api, user_id, data, message_id=message_id)
+            return
+        index = int(data.get("review_index", 0))
+        if payload == "review_prev":
+            index = max(0, index - 1)
+        else:
+            index = min(len(cards) - 1, index + 1)
+        data["review_index"] = index
+        set_max_fsm_state(user_id, MENU, data)
+        await _send_review_card(api, user_id, message_id, cards, index)
+        return
+
+    if payload == "faq_referral":
+        await _reply(
+            api, user_id, message_id,
+            "🎁 РЕФЕРАЛЬНАЯ ПРОГРАММА — КРАТКО\n\n"
+            "Вы приглашаете друга по своей ссылке.\n\n"
+            "Друг получает:\n"
+            "✅ бесплатное диагностическое занятие;\n"
+            "✅ скидку 20% на своё первое платное занятие.\n\n"
+            "Вы получаете:\n"
+            "✅ +1 бесплатное занятие на свой баланс — после того, как друг оплатит первое занятие.\n\n"
+            "Свою реферальную ссылку возьмите в 👤 Личный кабинет → 🎁 Мой реферальный код.",
+            faq_back_kb(),
+        )
+        return
+
+    if payload == "faq_link":
+        await _reply(
+            api, user_id, message_id,
+            "👤 ПРИВЯЗКА АККАУНТА\n\n"
+            "Когда администратор заводит вашу карточку, он использует ваш номер телефона "
+            "или Telegram @username для автоматической привязки.\n\n"
+            "Если в Личном кабинете написано «Вы не найдены в базе» — "
+            "значит ваш аккаунт ещё не привязан к карточке ученика. "
+            "Напишите администратору, и он привяжет вас вручную.\n\n"
+            "Также можно связать MAX-аккаунт с Telegram: "
+            "откройте 👤 Личный кабинет → 🔗 Связать с Telegram.",
+            faq_back_kb(),
+        )
+        return
+
+    if payload == "show_referral_code":
+        students = find_students_by_max_id(user_id)
+        if not students:
+            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе. Обратитесь к администратору.", back_menu_kb())
+            return
+        telegram_id = students[0][2]
+        if not telegram_id:
+            await _reply(
+                api, user_id, message_id,
+                "🎁 МОЙ РЕФЕРАЛЬНЫЙ КОД\n\n"
+                "Для получения реферальной ссылки сначала привяжите Telegram-аккаунт:\n"
+                "👤 Личный кабинет → 🔗 Связать с Telegram.\n\n"
+                "После привязки ссылка будет доступна здесь.",
+                back_menu_kb(),
+            )
+            return
+        tg_bot_username = TG_BOT_USERNAME or "integral_school_ru_bot"
+        referral_link = f"https://t.me/{tg_bot_username}?start=ref_{telegram_id}"
+        await _reply(
+            api, user_id, message_id,
+            f"🎁 ВАШ РЕФЕРАЛЬНЫЙ КОД\n\n"
+            f"{referral_link}\n\n"
+            "Друг переходит → диагностика → первая оплата со скидкой 20% → вам +1 занятие.",
+            back_menu_kb(),
+        )
         return
 
     if payload == "noop":
