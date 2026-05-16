@@ -1,4 +1,3 @@
-import sqlite3
 import json
 import os
 import importlib.util
@@ -13,11 +12,7 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     psycopg2 = None
 
-BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = (BASE_DIR / "school_system.db").resolve()
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-USE_POSTGRES = DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://")
 
 
 def _replace_qmark_placeholders(sql: str) -> str:
@@ -215,37 +210,29 @@ class PostgresConnectionCompat:
 
 
 def get_connection():
-    if USE_POSTGRES:
-        if psycopg2 is None:
-            raise RuntimeError(
-                "DATABASE_URL is set, but psycopg2 is not installed. Install dependencies from requirements.txt."
-            )
-        conn = psycopg2.connect(DATABASE_URL)
-        return PostgresConnectionCompat(conn)
-
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    if psycopg2 is None:
+        raise RuntimeError(
+            "psycopg2 is not installed. Install dependencies from requirements.txt."
+        )
+    conn = psycopg2.connect(DATABASE_URL)
+    return PostgresConnectionCompat(conn)
 
 
 def get_db_backend_name() -> str:
-    return "postgresql" if USE_POSTGRES else "sqlite"
+    return "postgresql"
 
 
 def get_existing_tables() -> set[str]:
     conn = get_connection()
     cur = conn.cursor()
-    if USE_POSTGRES:
-        cur.execute(
-            """
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = 'public'
-              AND table_type = 'BASE TABLE'
-            """
-        )
-    else:
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    cur.execute(
+        """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_type = 'BASE TABLE'
+        """
+    )
     rows = cur.fetchall()
     conn.close()
     return {str(row[0]) for row in rows if row and row[0]}
@@ -573,50 +560,44 @@ def init_db():
 
 def _ensure_promo_codes_columns(cur):
     """Add missing columns to promo_codes table (PostgreSQL migration safety)."""
-    if USE_POSTGRES:
-        cur.execute(
-            """
-            SELECT column_name FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = 'promo_codes'
-            """
-        )
-        existing = {row[0] for row in cur.fetchall()}
-        if "applies_to_packages" not in existing:
-            cur.execute("ALTER TABLE promo_codes ADD COLUMN applies_to_packages INTEGER NOT NULL DEFAULT 0")
-        if "max_uses" not in existing:
-            cur.execute("ALTER TABLE promo_codes ADD COLUMN max_uses INTEGER")
-        if "used_count" not in existing:
-            cur.execute("ALTER TABLE promo_codes ADD COLUMN used_count INTEGER NOT NULL DEFAULT 0")
-        if "valid_until" not in existing:
-            cur.execute("ALTER TABLE promo_codes ADD COLUMN valid_until TEXT")
-        if "active" not in existing:
-            cur.execute("ALTER TABLE promo_codes ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
-        if "created_at" not in existing:
-            cur.execute("ALTER TABLE promo_codes ADD COLUMN created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP")
-        # Make created_by and created_at nullable (old schema had them NOT NULL without defaults)
-        cur.execute("""
-            SELECT is_nullable FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = 'promo_codes' AND column_name = 'created_by'
-        """)
-        row = cur.fetchone()
-        if row and row[0] == "NO":
-            cur.execute("ALTER TABLE promo_codes ALTER COLUMN created_by DROP NOT NULL")
-        cur.execute("""
-            SELECT is_nullable, column_default FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = 'promo_codes' AND column_name = 'created_at'
-        """)
-        row = cur.fetchone()
-        if row and (row[0] == "NO" or not row[1]):
-            cur.execute("ALTER TABLE promo_codes ALTER COLUMN created_at DROP NOT NULL")
-            cur.execute("ALTER TABLE promo_codes ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP")
-    else:
-        cur.execute("PRAGMA table_info(promo_codes)")
-        existing = {row[1] for row in cur.fetchall()}
-        if "applies_to_packages" not in existing:
-            cur.execute("ALTER TABLE promo_codes ADD COLUMN applies_to_packages INTEGER NOT NULL DEFAULT 0")
+    cur.execute(
+        """
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'promo_codes'
+        """
+    )
+    existing = {row[0] for row in cur.fetchall()}
+    if "applies_to_packages" not in existing:
+        cur.execute("ALTER TABLE promo_codes ADD COLUMN applies_to_packages INTEGER NOT NULL DEFAULT 0")
+    if "max_uses" not in existing:
+        cur.execute("ALTER TABLE promo_codes ADD COLUMN max_uses INTEGER")
+    if "used_count" not in existing:
+        cur.execute("ALTER TABLE promo_codes ADD COLUMN used_count INTEGER NOT NULL DEFAULT 0")
+    if "valid_until" not in existing:
+        cur.execute("ALTER TABLE promo_codes ADD COLUMN valid_until TEXT")
+    if "active" not in existing:
+        cur.execute("ALTER TABLE promo_codes ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+    if "created_at" not in existing:
+        cur.execute("ALTER TABLE promo_codes ADD COLUMN created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP")
+    # Make created_by and created_at nullable (old schema had them NOT NULL without defaults)
+    cur.execute("""
+        SELECT is_nullable FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'promo_codes' AND column_name = 'created_by'
+    """)
+    row = cur.fetchone()
+    if row and row[0] == "NO":
+        cur.execute("ALTER TABLE promo_codes ALTER COLUMN created_by DROP NOT NULL")
+    cur.execute("""
+        SELECT is_nullable, column_default FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'promo_codes' AND column_name = 'created_at'
+    """)
+    row = cur.fetchone()
+    if row and (row[0] == "NO" or not row[1]):
+        cur.execute("ALTER TABLE promo_codes ALTER COLUMN created_at DROP NOT NULL")
+        cur.execute("ALTER TABLE promo_codes ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP")
 
 
-def _ensure_teachers_table_columns(cur: sqlite3.Cursor):
+def _ensure_teachers_table_columns(cur):
     cur.execute("PRAGMA table_info(teachers)")
     existing_columns = {row[1] for row in cur.fetchall()}
 
@@ -628,14 +609,14 @@ def _ensure_teachers_table_columns(cur: sqlite3.Cursor):
         cur.execute("ALTER TABLE teachers ADD COLUMN photo_path TEXT")
 
 
-def _ensure_publication_posts_columns(cur: sqlite3.Cursor):
+def _ensure_publication_posts_columns(cur):
     cur.execute("PRAGMA table_info(publication_posts)")
     existing_columns = {row[1] for row in cur.fetchall()}
     if "audience" not in existing_columns:
         cur.execute("ALTER TABLE publication_posts ADD COLUMN audience TEXT NOT NULL DEFAULT 'students'")
 
 
-def _ensure_review_cards_columns(cur: sqlite3.Cursor):
+def _ensure_review_cards_columns(cur):
     cur.execute("PRAGMA table_info(review_cards)")
     existing_columns = {row[1] for row in cur.fetchall()}
     if "media_file_id" not in existing_columns:
@@ -677,7 +658,7 @@ def _sync_teacher_subject_links():
     conn.close()
 
 
-def _ensure_students_table_columns(cur: sqlite3.Cursor):
+def _ensure_students_table_columns(cur):
     cur.execute("PRAGMA table_info(students)")
     existing_columns = {row[1] for row in cur.fetchall()}
     if "telegram_username" not in existing_columns:
@@ -694,7 +675,7 @@ def _ensure_students_table_columns(cur: sqlite3.Cursor):
         cur.execute("ALTER TABLE students ADD COLUMN max_username TEXT")
 
 
-def _ensure_users_table_columns(cur: sqlite3.Cursor):
+def _ensure_users_table_columns(cur):
     cur.execute("PRAGMA table_info(users)")
     existing_columns = {row[1] for row in cur.fetchall()}
     if "telegram_username" not in existing_columns:
@@ -705,7 +686,7 @@ def _ensure_users_table_columns(cur: sqlite3.Cursor):
         cur.execute("ALTER TABLE users ADD COLUMN max_id INTEGER")
 
 
-def _ensure_payment_requests_columns(cur: sqlite3.Cursor):
+def _ensure_payment_requests_columns(cur):
     cur.execute("PRAGMA table_info(payment_requests)")
     existing_columns = {row[1] for row in cur.fetchall()}
     if "source_platform" not in existing_columns:
@@ -717,9 +698,6 @@ def _ensure_payment_requests_columns(cur: sqlite3.Cursor):
 
 
 def _ensure_postgres_bigint_columns(cur):
-    if not USE_POSTGRES:
-        return
-
     bigint_columns: dict[str, set[str]] = {
         "students": {"telegram_id", "referred_by_telegram_id", "max_id"},
         "users": {"telegram_id", "max_id"},
@@ -1062,10 +1040,6 @@ def reset_all_system_data() -> dict:
     cur.execute("DROP TABLE IF EXISTS applications")
     cur.execute("DROP TABLE IF EXISTS lessons")
     cur.execute("DROP TABLE IF EXISTS payments")
-
-    if not USE_POSTGRES:
-        for table_name in table_order:
-            cur.execute("DELETE FROM sqlite_sequence WHERE name = ?", (table_name,))
 
     conn.commit()
     conn.close()
@@ -1468,20 +1442,6 @@ def add_student_lesson(student_id: int, teacher_id: int, subject_name: str, less
     cur = conn.cursor()
 
     cur.execute(
-        "SELECT 1 FROM student_lessons WHERE student_id = ? LIMIT 1",
-        (student_id,),
-    )
-    is_first_direction = cur.fetchone() is None
-
-    diagnostic_added = False
-    if is_first_direction and lesson_balance < 1:
-        # New students get one free diagnostic lesson on the very first
-        # direction so the cabinet immediately shows balance >= 1. The bonus
-        # is logged separately in balance_history for traceability.
-        lesson_balance = 1
-        diagnostic_added = True
-
-    cur.execute(
         """
         INSERT INTO student_lessons (student_id, teacher_id, subject_name, lesson_balance, tariff_type)
         VALUES (?, ?, ?, ?, ?)
@@ -1490,19 +1450,18 @@ def add_student_lesson(student_id: int, teacher_id: int, subject_name: str, less
     )
     new_lesson_id = cur.lastrowid
 
-    if is_first_direction and new_lesson_id:
+    if new_lesson_id and lesson_balance != 0:
         cur.execute(
             """
             INSERT INTO balance_history (
                 student_lesson_id, operation_type, lessons_delta,
                 comment, created_at, created_by
-            ) VALUES (?, 'diagnostic_lesson', ?, ?, ?, ?)
+            ) VALUES (?, 'initial_balance', ?, ?, ?, ?)
             """,
             (
                 new_lesson_id,
-                1 if diagnostic_added else lesson_balance,
-                "Бесплатная диагностика" if diagnostic_added
-                else "Стартовый баланс при создании направления",
+                lesson_balance,
+                "Стартовый баланс при создании направления",
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 None,
             ),
@@ -4726,9 +4685,6 @@ def mark_daily_debt_report_sent(report_date: str):
 
 def cleanup_old_data(days: int = 14) -> dict:
     """Удаляет старые данные (старше days дней) для оптимизации БД."""
-    if USE_POSTGRES:
-        return {"status": "skipped", "message": "Cleanup only works for SQLite"}
-
     conn = get_connection()
     cur = conn.cursor()
     cutoff_date = (datetime.now() - __import__('datetime').timedelta(days=days)).strftime("%Y-%m-%d")
@@ -4736,13 +4692,13 @@ def cleanup_old_data(days: int = 14) -> dict:
     stats = {}
 
     # Удаляем старые логи действий админа
-    cur.execute("SELECT COUNT(1) FROM admin_actions WHERE created_at < ?", (cutoff_date,))
+    cur.execute("SELECT COUNT(1) FROM admin_actions WHERE created_at < %s", (cutoff_date,))
     count_before = int(cur.fetchone()[0] or 0)
-    cur.execute("DELETE FROM admin_actions WHERE created_at < ?", (cutoff_date,))
+    cur.execute("DELETE FROM admin_actions WHERE created_at < %s", (cutoff_date,))
     stats["admin_actions_deleted"] = int(cur.rowcount or 0)
 
     # Удаляем старые публикации
-    cur.execute("DELETE FROM publication_posts WHERE status = 'sent' AND sent_at < ?", (cutoff_date,))
+    cur.execute("DELETE FROM publication_posts WHERE status = 'sent' AND sent_at < %s", (cutoff_date,))
     stats["publications_deleted"] = int(cur.rowcount or 0)
 
     conn.commit()
@@ -4752,43 +4708,7 @@ def cleanup_old_data(days: int = 14) -> dict:
 
 def optimize_database() -> dict:
     """Оптимизирует БД: создаёт индексы и запускает VACUUM."""
-    if USE_POSTGRES:
-        return {"status": "skipped", "message": "Optimization only works for SQLite"}
-
-    conn = get_connection()
-    cur = conn.cursor()
-
-    # Создаём важные индексы если их ещё нет
-    indexes = [
-        ("idx_admin_actions_created_at", "admin_actions(created_at)"),
-        ("idx_admin_actions_admin_id", "admin_actions(admin_telegram_id)"),
-        ("idx_students_telegram_id", "students(telegram_id)"),
-        ("idx_users_telegram_id", "users(telegram_id)"),
-        ("idx_student_lessons_student_id", "student_lessons(student_id)"),
-        ("idx_student_lessons_teacher_id", "student_lessons(teacher_id)"),
-        ("idx_teachers_telegram_id", "teachers(telegram_id)"),
-    ]
-
-    created = 0
-    for idx_name, idx_def in indexes:
-        try:
-            cur.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_def}")
-            created += 1
-        except Exception:
-            pass
-
-    conn.commit()
-
-    # VACUUM для оптимизации
-    cur.execute("VACUUM")
-    conn.commit()
-    conn.close()
-
-    return {
-        "status": "success",
-        "indexes_created": created,
-        "vacuumed": True,
-    }
+    return {"status": "skipped", "message": "PostgreSQL manages optimization automatically"}
 
 
 # ---------------------------------------------------------------------------
@@ -5401,6 +5321,7 @@ def create_promo_code(
     discount_value: float,
     valid_until: str | None = None,
     max_uses: int | None = None,
+    applies_to_packages: int = 0,
 ) -> int | None:
     """Create a new promo code. Returns the new id, or None if code already exists."""
     conn = get_connection()
@@ -5408,10 +5329,10 @@ def create_promo_code(
     try:
         cur.execute(
             """
-            INSERT INTO promo_codes (code, discount_type, discount_value, valid_until, max_uses, active)
-            VALUES (?, ?, ?, ?, ?, 1)
+            INSERT INTO promo_codes (code, discount_type, discount_value, valid_until, max_uses, applies_to_packages, active)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
             """,
-            (code.upper().strip(), discount_type, discount_value, valid_until, max_uses),
+            (code.upper().strip(), discount_type, discount_value, valid_until, max_uses, applies_to_packages),
         )
         conn.commit()
         row_id = cur.lastrowid
@@ -5425,7 +5346,7 @@ def create_promo_code(
 def apply_promo_code_for_student(student_id: int, code: str) -> tuple[bool, str]:
     """Find promo by code text, validate, assign to student.
 
-    Returns (True, "dtype:dvalue") on success or (False, reason) on failure.
+    Returns (True, "dtype:dvalue:applies_to_packages") on success or (False, reason) on failure.
     Reasons: not_found, inactive, expired, limit_reached, already_assigned, error
     """
     _MSK = timezone(timedelta(hours=3))
@@ -5434,14 +5355,14 @@ def apply_promo_code_for_student(student_id: int, code: str) -> tuple[bool, str]
     cur = conn.cursor()
     try:
         cur.execute(
-            """SELECT id, code, discount_type, discount_value, active, valid_until, max_uses, used_count
+            """SELECT id, code, discount_type, discount_value, active, valid_until, max_uses, used_count, applies_to_packages
                FROM promo_codes WHERE code = ?""",
             (code.upper().strip(),),
         )
         row = cur.fetchone()
         if not row:
             return False, "not_found"
-        promo_id, _, dtype, dvalue, active, valid_until, max_uses, used_count = row
+        promo_id, _, dtype, dvalue, active, valid_until, max_uses, used_count, applies_to_packages = row
         if not active:
             return False, "inactive"
         if valid_until and valid_until < now:
@@ -5459,7 +5380,7 @@ def apply_promo_code_for_student(student_id: int, code: str) -> tuple[bool, str]
             (student_id, promo_id),
         )
         conn.commit()
-        return True, f"{dtype}:{dvalue}"
+        return True, f"{dtype}:{dvalue}:{applies_to_packages}"
     except Exception:
         return False, "error"
     finally:
@@ -5531,64 +5452,119 @@ def deactivate_promo_code(promo_id: int) -> bool:
     return True
 
 
+def activate_promo_code(promo_id: int) -> bool:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("UPDATE promo_codes SET active = 1 WHERE id = ?", (promo_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def delete_promo_code(promo_id: int) -> bool:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM student_promo_codes WHERE promo_code_id = ?", (promo_id,))
+    cur.execute("DELETE FROM promo_codes WHERE id = ?", (promo_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def consume_promo_for_student(student_id: int) -> bool:
+    """Remove promo from student after payment confirmed and increment used_count."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT spc.promo_code_id FROM student_promo_codes spc
+               JOIN promo_codes pc ON pc.id = spc.promo_code_id
+               WHERE spc.student_id = ? AND pc.active = 1
+               LIMIT 1""",
+            (student_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return False
+        promo_id = row[0]
+        cur.execute("UPDATE promo_codes SET used_count = used_count + 1 WHERE id = ?", (promo_id,))
+        cur.execute(
+            "DELETE FROM student_promo_codes WHERE student_id = ? AND promo_code_id = ?",
+            (student_id, promo_id),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        conn.close()
+        return False
+
+
 def get_revenue_by_period() -> dict:
-    """Return revenue stats grouped by week and month for the revenue sheet."""
+    """Return revenue stats grouped by week and month for the revenue sheet, split by tariff_type."""
     conn = get_connection()
     cur = conn.cursor()
 
-    if USE_POSTGRES:
-        week_sql = """
-            SELECT
-                TO_CHAR(lesson_date::date, 'IYYY-IW') AS week_key,
-                MIN(lesson_date) AS week_start,
-                COUNT(*) AS lessons
-            FROM attendance
-            WHERE status IN ('present', 'completed')
-            GROUP BY week_key
-            ORDER BY week_key DESC
-            LIMIT 8
-        """
-        month_sql = """
-            SELECT
-                TO_CHAR(lesson_date::date, 'YYYY-MM') AS month_key,
-                COUNT(*) AS lessons
-            FROM attendance
-            WHERE status IN ('present', 'completed')
-            GROUP BY month_key
-            ORDER BY month_key DESC
-            LIMIT 6
-        """
-    else:
-        week_sql = """
-            SELECT
-                strftime('%Y-W%W', lesson_date) AS week_key,
-                MIN(lesson_date) AS week_start,
-                COUNT(*) AS lessons
-            FROM attendance
-            WHERE status IN ('present', 'completed')
-            GROUP BY week_key
-            ORDER BY week_key DESC
-            LIMIT 8
-        """
-        month_sql = """
-            SELECT
-                strftime('%Y-%m', lesson_date) AS month_key,
-                COUNT(*) AS lessons
-            FROM attendance
-            WHERE status IN ('present', 'completed')
-            GROUP BY month_key
-            ORDER BY month_key DESC
-            LIMIT 6
-        """
+    week_sql = """
+        SELECT
+            TO_CHAR(a.lesson_date::date, 'IYYY-IW') AS week_key,
+            MIN(a.lesson_date) AS week_start,
+            COUNT(*) FILTER (WHERE sl.tariff_type = 'single') AS per_lesson,
+            COUNT(*) FILTER (WHERE sl.tariff_type = 'package') AS package,
+            COUNT(*) AS total
+        FROM attendance a
+        JOIN student_lessons sl ON sl.id = a.student_lesson_id
+        WHERE a.status IN ('present', 'completed')
+        GROUP BY week_key
+        ORDER BY week_key DESC
+        LIMIT 8
+    """
+    month_sql = """
+        SELECT
+            TO_CHAR(a.lesson_date::date, 'YYYY-MM') AS month_key,
+            COUNT(*) FILTER (WHERE sl.tariff_type = 'single') AS per_lesson,
+            COUNT(*) FILTER (WHERE sl.tariff_type = 'package') AS package,
+            COUNT(*) AS total
+        FROM attendance a
+        JOIN student_lessons sl ON sl.id = a.student_lesson_id
+        WHERE a.status IN ('present', 'completed')
+        GROUP BY month_key
+        ORDER BY month_key DESC
+        LIMIT 6
+    """
+    total_sql = """
+        SELECT
+            COUNT(*) FILTER (WHERE sl.tariff_type = 'single'),
+            COUNT(*) FILTER (WHERE sl.tariff_type = 'package'),
+            COUNT(*)
+        FROM attendance a
+        JOIN student_lessons sl ON sl.id = a.student_lesson_id
+        WHERE a.status IN ('present', 'completed')
+    """
 
     cur.execute(week_sql)
-    weeks = [{"week_key": str(r[0]), "week_start": str(r[1]), "lessons": r[2]} for r in cur.fetchall()]
+    weeks = [
+        {"week_key": str(r[0]), "week_start": str(r[1]),
+         "per_lesson": r[2] or 0, "package": r[3] or 0, "lessons": r[4] or 0}
+        for r in cur.fetchall()
+    ]
 
     cur.execute(month_sql)
-    months = [{"month_key": str(r[0]), "lessons": r[1]} for r in cur.fetchall()]
+    months = [
+        {"month_key": str(r[0]),
+         "per_lesson": r[1] or 0, "package": r[2] or 0, "lessons": r[3] or 0}
+        for r in cur.fetchall()
+    ]
 
-    cur.execute("SELECT COUNT(*) FROM attendance WHERE status IN ('present', 'completed')")
-    total = cur.fetchone()[0] or 0
+    cur.execute(total_sql)
+    tr = cur.fetchone()
+    total_per_lesson = tr[0] or 0 if tr else 0
+    total_package    = tr[1] or 0 if tr else 0
+    total            = tr[2] or 0 if tr else 0
 
     conn.close()
-    return {"weeks": weeks, "months": months, "total": total}
+    return {
+        "weeks": weeks, "months": months,
+        "total": total, "total_per_lesson": total_per_lesson, "total_package": total_package,
+    }

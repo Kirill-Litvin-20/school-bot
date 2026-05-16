@@ -162,13 +162,41 @@ async def start_handler(message: Message, state: FSMContext):
         await message.answer("Профиль успешно привязан. Доступ обновлен, используйте /start еще раз.")
         return
 
-    if start_payload.lower() == "pay":
-        await message.answer(
-            "Здравствуйте!\n\n"
-            "Пожалуйста, отправьте фото или скриншот чека об оплате.\n\n"
-            "После проверки оплаты мы сообщим результат."
-        )
-        await state.set_state(ApplicationForm.payment_proof)
+    if start_payload.lower() in ("pay", "pay_debt"):
+        students = find_students_by_telegram_id(message.from_user.id)
+        if not students:
+            await message.answer(
+                "❌ Вы не зарегистрированы в системе.\n"
+                "Пожалуйста, обратитесь к администратору.",
+            )
+            await state.set_state(ApplicationForm.menu)
+            return
+
+        student_id = students[0][0]
+        directions = get_student_directions(student_id)
+        debt_directions = [(d[1], d[2], d[3]) for d in directions if d[3] < 0]
+
+        rows = []
+        if debt_directions:
+            debt_lines = "\n".join(
+                f"• {subj} — {teacher}: долг {abs(bal)} занят{'ие' if abs(bal) == 1 else 'ия' if 2 <= abs(bal) <= 4 else 'ий'}"
+                for teacher, subj, bal in debt_directions
+            )
+            text = (
+                "⚠️ <b>У вас есть задолженность по занятиям:</b>\n\n"
+                f"{debt_lines}\n\n"
+                "Для погашения долга переведите нужную сумму и отправьте чек."
+            )
+            rows.append([InlineKeyboardButton(text="💸 Погасить долг", callback_data="pay_debt")])
+        else:
+            text = "Выберите вариант оплаты:"
+            rows.append([InlineKeyboardButton(text="✨ Оплатить одно занятие", callback_data="pay_single")])
+            rows.append([InlineKeyboardButton(text="📦 Выбрать пакет", callback_data="pay_package")])
+
+        rows.append([InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")])
+
+        await state.set_state(ApplicationForm.payment_type_choice)
+        await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
         return
     await message.answer(
         "Здравствуйте! Пожалуйста, укажите, кто будет оставлять заявку.",
@@ -186,15 +214,11 @@ async def menu_command_handler(message: Message, state: FSMContext):
     ApplicationForm.user_type, lambda c: c.data in ["user_student", "user_parent"]
 )
 async def choose_user_type(callback: CallbackQuery, state: FSMContext):
+    from handlers.common import flow_edit
     user_type_map = {"user_student": "Ученик", "user_parent": "Родитель"}
-
     await state.update_data(user_type=user_type_map[callback.data])
-
-    await callback.message.answer(
-        "Благодарим. Теперь, пожалуйста, выберите раздел:",
-        reply_markup=get_main_menu_keyboard(),
-    )
-    await state.set_state(ApplicationForm.menu)
+    await state.set_state(ApplicationForm.name)
+    await flow_edit(callback, state, "👤 Как к вам обращаться? Напишите имя.")
     await callback.answer()
 
 
@@ -675,11 +699,16 @@ async def enter_promo_code_input(message: Message, state: FSMContext):
         return
     ok, result = apply_promo_code_for_student(student_id, code)
     if ok:
-        dtype, dvalue = result.split(":", 1)
+        parts = result.split(":")
+        dtype, dvalue = parts[0], parts[1]
+        applies_to = int(parts[2]) if len(parts) > 2 else 0
         unit = "%" if dtype == "percent" else "₽"
+        scope_map = {0: "разовые занятия", 1: "пакеты занятий", 2: "разовые и пакеты"}
+        scope_str = scope_map.get(applies_to, "занятия")
         text = (
             f"✅ Промокод <b>{code}</b> активирован!\n"
-            f"Скидка {int(float(dvalue))}{unit} будет применена при следующей оплате."
+            f"Скидка {int(float(dvalue))}{unit} будет применена при следующей оплате.\n"
+            f"Применяется к: {scope_str}."
         )
     elif result == "not_found":
         text = f"❌ Промокод <b>{code}</b> не найден. Проверьте правильность написания."
