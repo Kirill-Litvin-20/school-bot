@@ -10,6 +10,7 @@ class ApplicationForm(StatesGroup):
     review_card = State()
 
     direction_choice = State()
+    debt_direction_choice = State()
     payment_type_choice = State()
     package_selection = State()
     payment_proof = State()

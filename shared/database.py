@@ -595,6 +595,23 @@ def _ensure_promo_codes_columns(cur):
     if row and (row[0] == "NO" or not row[1]):
         cur.execute("ALTER TABLE promo_codes ALTER COLUMN created_at DROP NOT NULL")
         cur.execute("ALTER TABLE promo_codes ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP")
+    # payment_requests: track which promo was actually applied
+    cur.execute(
+        """SELECT column_name FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'payment_requests'"""
+    )
+    pr_cols = {r[0] for r in cur.fetchall()}
+    if 'promo_code_id_used' not in pr_cols:
+        cur.execute("ALTER TABLE payment_requests ADD COLUMN promo_code_id_used INTEGER")
+
+    # student_promo_codes: used_at for one-time-per-student enforcement
+    cur.execute(
+        """SELECT column_name FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'student_promo_codes'"""
+    )
+    spc_cols = {r[0] for r in cur.fetchall()}
+    if 'used_at' not in spc_cols:
+        cur.execute("ALTER TABLE student_promo_codes ADD COLUMN used_at TEXT")
 
 
 def _ensure_teachers_table_columns(cur):
@@ -1827,6 +1844,7 @@ def create_payment_request(
     file_id: str,
     file_type: str,
     preferred_direction_id: int | None = None,
+    promo_code_id_used: int | None = None,
 ):
     conn = get_connection()
     cur = conn.cursor()
@@ -1843,9 +1861,10 @@ def create_payment_request(
             status,
             created_at,
             updated_at,
-            preferred_direction_id
+            preferred_direction_id,
+            promo_code_id_used
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
         """,
         (
             telegram_user_id,
@@ -1857,6 +1876,7 @@ def create_payment_request(
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             preferred_direction_id,
+            promo_code_id_used,
         )
     )
 
@@ -2230,10 +2250,10 @@ def finalize_payment_with_topup(
             conn.rollback()
             return False
 
-        # Increment used_count for any active promo the payer has
+        # Mark promo as used only if it was actually applied to this payment
         cur.execute(
             """
-            SELECT COALESCE(s.id, s2.id)
+            SELECT pr.promo_code_id_used, COALESCE(s.id, s2.id)
             FROM payment_requests pr
             LEFT JOIN students s ON s.telegram_id = pr.telegram_user_id
             LEFT JOIN students s2 ON s2.max_id = pr.max_user_id
@@ -2242,23 +2262,18 @@ def finalize_payment_with_topup(
             """,
             (payment_request_id,)
         )
-        payer_row = cur.fetchone()
-        if payer_row and payer_row[0]:
+        promo_pay_row = cur.fetchone()
+        if promo_pay_row and promo_pay_row[0] and promo_pay_row[1]:
+            promo_id_used = promo_pay_row[0]
+            student_id_for_promo = promo_pay_row[1]
             cur.execute(
-                """
-                SELECT pc.id FROM promo_codes pc
-                JOIN student_promo_codes spc ON spc.promo_code_id = pc.id
-                WHERE spc.student_id = ? AND pc.active = 1
-                ORDER BY spc.assigned_at DESC LIMIT 1
-                """,
-                (payer_row[0],)
+                "UPDATE promo_codes SET used_count = used_count + 1 WHERE id = ?",
+                (promo_id_used,)
             )
-            promo_row = cur.fetchone()
-            if promo_row:
-                cur.execute(
-                    "UPDATE promo_codes SET used_count = used_count + 1 WHERE id = ?",
-                    (promo_row[0],)
-                )
+            cur.execute(
+                "UPDATE student_promo_codes SET used_at = CURRENT_TIMESTAMP WHERE student_id = ? AND promo_code_id = ?",
+                (student_id_for_promo, promo_id_used)
+            )
 
         conn.commit()
         return True
@@ -5248,6 +5263,7 @@ def get_active_promo_for_student_id(student_id: int):
           AND pc.active = 1
           AND (pc.valid_until IS NULL OR pc.valid_until >= ?)
           AND (pc.max_uses IS NULL OR pc.used_count < pc.max_uses)
+          AND spc.used_at IS NULL
         ORDER BY spc.assigned_at DESC
         LIMIT 1
         """,
@@ -5274,6 +5290,7 @@ def get_active_promo_for_user(telegram_user_id: int):
           AND pc.active = 1
           AND (pc.valid_until IS NULL OR pc.valid_until >= ?)
           AND (pc.max_uses IS NULL OR pc.used_count < pc.max_uses)
+          AND spc.used_at IS NULL
         ORDER BY spc.assigned_at DESC
         LIMIT 1
         """,
@@ -5300,6 +5317,7 @@ def get_active_promo_for_max_user(max_user_id: int):
           AND pc.active = 1
           AND (pc.valid_until IS NULL OR pc.valid_until >= ?)
           AND (pc.max_uses IS NULL OR pc.used_count < pc.max_uses)
+          AND spc.used_at IS NULL
         ORDER BY spc.assigned_at DESC
         LIMIT 1
         """,
@@ -5375,10 +5393,13 @@ def apply_promo_code_for_student(student_id: int, code: str) -> tuple[bool, str]
         if max_uses is not None and used_count >= max_uses:
             return False, "limit_reached"
         cur.execute(
-            "SELECT id FROM student_promo_codes WHERE student_id = ? AND promo_code_id = ?",
+            "SELECT id, used_at FROM student_promo_codes WHERE student_id = ? AND promo_code_id = ?",
             (student_id, promo_id),
         )
-        if cur.fetchone():
+        existing = cur.fetchone()
+        if existing:
+            if existing[1]:
+                return False, "already_used"
             return False, "already_assigned"
         cur.execute(
             "INSERT INTO student_promo_codes (student_id, promo_code_id) VALUES (?, ?)",

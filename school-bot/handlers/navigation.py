@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import quote
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -50,6 +51,7 @@ from .common import (
     send_teacher_card,
     show_main_menu,
 )
+from .payments import show_debt_payment_from_message
 
 router = Router()
 router.message.filter(F.chat.type == "private")
@@ -166,40 +168,7 @@ async def start_handler(message: Message, state: FSMContext):
         return
 
     if start_payload.lower() in ("pay", "pay_debt"):
-        students = find_students_by_telegram_id(message.from_user.id)
-        if not students:
-            await message.answer(
-                "❌ Вы не зарегистрированы в системе.\n"
-                "Пожалуйста, обратитесь к администратору.",
-            )
-            await state.set_state(ApplicationForm.menu)
-            return
-
-        student_id = students[0][0]
-        directions = get_student_directions(student_id)
-        debt_directions = [(d[1], d[2], d[3]) for d in directions if d[3] < 0]
-
-        rows = []
-        if debt_directions:
-            debt_lines = "\n".join(
-                f"• {subj} — {teacher}: долг {abs(bal)} занят{'ие' if abs(bal) == 1 else 'ия' if 2 <= abs(bal) <= 4 else 'ий'}"
-                for teacher, subj, bal in debt_directions
-            )
-            text = (
-                "⚠️ <b>У вас есть задолженность по занятиям:</b>\n\n"
-                f"{debt_lines}\n\n"
-                "Для погашения долга переведите нужную сумму и отправьте чек."
-            )
-            rows.append([InlineKeyboardButton(text="💸 Погасить долг", callback_data="pay_debt")])
-        else:
-            text = "Выберите вариант оплаты:"
-            rows.append([InlineKeyboardButton(text="✨ Оплатить одно занятие", callback_data="pay_single")])
-            rows.append([InlineKeyboardButton(text="📦 Выбрать пакет", callback_data="pay_package")])
-
-        rows.append([InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")])
-
-        await state.set_state(ApplicationForm.payment_type_choice)
-        await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+        await show_debt_payment_from_message(message, state)
         return
     await message.answer(
         "Добро пожаловать в школу Интеграл! 👋",
@@ -319,6 +288,30 @@ async def menu_cabinet(callback: CallbackQuery, state: FSMContext):
             "⚠️ Не удалось загрузить личный кабинет. Попробуйте ещё раз.",
             show_alert=True,
         )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "open_cabinet")
+async def open_cabinet_any_state(callback: CallbackQuery, state: FSMContext):
+    """Open cabinet from any state (e.g. after payment confirmation notification)."""
+    students = find_students_by_telegram_id(callback.from_user.id)
+    if not students:
+        await callback.answer("❌ Вы не найдены в базе учеников.", show_alert=True)
+        return
+    student_id, student_name, _, _ = students[0]
+    await state.set_state(ApplicationForm.menu)
+    try:
+        directions = get_student_directions(student_id)
+        recent_payments = get_recent_payment_history_by_telegram_user(callback.from_user.id, limit=4)
+        text = build_cabinet_text(student_name, directions, recent_payments, student_id=student_id)
+        text += build_multi_students_warning(len(students))
+        try:
+            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard())
+        except Exception:
+            await callback.message.answer(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard())
+    except Exception:
+        logger.exception("open_cabinet failed for user %s", callback.from_user.id)
+        await callback.answer("⚠️ Не удалось загрузить личный кабинет.", show_alert=True)
     await callback.answer()
 
 
@@ -459,11 +452,13 @@ async def show_referral_code(callback: CallbackQuery):
         "Схема простая:\n"
         "Друг переходит → бесплатная диагностика → оплачивает занятие со скидкой → вы получаете бонус"
     )
+    share_text = "Привет! Я занимаюсь в школе Интеграл и советую попробовать 🎓 Переходи по моей ссылке — получишь скидку 20% на первое занятие!"
+    share_url = f"https://t.me/share/url?url={quote(referral_link, safe='')}&text={quote(share_text, safe='')}"
     try:
         await callback.message.edit_text(
             text, parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📤 Поделиться ссылкой", url=f"https://t.me/share/url?url={referral_link}&text=Привет%21+Я+занимаюсь+в+школе+Интеграл+и+советую+попробовать+%F0%9F%8E%93+Переходи+по+моей+ссылке+%E2%80%94+получишь+скидку+20%25+на+первое+занятие%21")],
+                [InlineKeyboardButton(text="📤 Поделиться ссылкой", url=share_url)],
                 [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
             ]),
         )
@@ -728,6 +723,8 @@ async def enter_promo_code_input(message: Message, state: FSMContext):
         text = f"❌ Промокод <b>{code}</b> исчерпал лимит использований."
     elif result == "already_assigned":
         text = f"✅ Промокод <b>{code}</b> уже применён к вашему аккаунту."
+    elif result == "already_used":
+        text = f"❌ Промокод <b>{code}</b> вы уже использовали ранее. Каждый промокод можно использовать только один раз."
     else:
         text = "⚠️ Произошла ошибка. Попробуйте позже или обратитесь к администратору."
     await state.set_state(ApplicationForm.menu)

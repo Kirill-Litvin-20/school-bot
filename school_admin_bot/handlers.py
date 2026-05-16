@@ -5073,9 +5073,12 @@ async def promo_delete_yes(callback: CallbackQuery):
 async def admin_promo_create_start(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text(
-        "🎟 <b>Создание промокода</b>\n\n"
-        "Введите текст промокода (например: <code>SUMMER26</code>).\n"
-        "Используйте латиницу, цифры, дефис — будет преобразован в ВЕРХНИЙ регистр.",
+        "🎟 <b>Создание промокода — шаг 1 из 6</b>\n\n"
+        "<b>Название промокода</b>\n"
+        "Придумайте код, который ученик будет вводить в боте.\n\n"
+        "Требования: только латиница и цифры, минимум 2 символа.\n"
+        "Будет автоматически переведён в ВЕРХНИЙ регистр.\n\n"
+        "Пример: <code>ЛЕТО25</code>, <code>СКИДКА10</code>, <code>VIP</code>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="Отмена", callback_data="admin_promo_list")
@@ -5093,7 +5096,13 @@ async def admin_promo_code_text(message: Message, state: FSMContext):
         return
     await state.update_data(promo_code=code)
     await message.answer(
-        f"Код: <code>{code}</code>\n\nВыберите тип скидки:",
+        f"✅ Код: <code>{code}</code>\n\n"
+        f"🎟 <b>Создание промокода — шаг 2 из 6</b>\n\n"
+        "<b>Тип скидки</b>\n\n"
+        "• <b>Процент (%)</b> — скидка в процентах от суммы\n"
+        "  Например: -20% от 1500₽ = ученик платит 1200₽\n\n"
+        "• <b>Фиксированная сумма (₽)</b> — скидка фиксированной суммой\n"
+        "  Например: -300₽ от 1500₽ = ученик платит 1200₽",
         parse_mode="HTML",
         reply_markup=get_promo_discount_type_kb(),
     )
@@ -5104,9 +5113,16 @@ async def admin_promo_type(callback: CallbackQuery, state: FSMContext):
     dtype = "percent" if callback.data == "promo_type_percent" else "fixed_rub"
     await state.update_data(promo_type=dtype)
     unit = "%" if dtype == "percent" else "₽"
+    type_desc = (
+        "Процент от суммы оплаты. Например, скидка 20% от 1500₽ = ученик платит 1200₽"
+        if dtype == "percent" else
+        "Фиксированная сумма в рублях. Например, скидка 300₽ от 1500₽ = ученик платит 1200₽"
+    )
     await callback.message.edit_text(
-        f"Тип: {'процентная скидка' if dtype == 'percent' else 'фиксированная сумма'}\n\n"
-        f"Введите размер скидки (число, например <code>20</code> {unit}):",
+        f"🎟 <b>Создание промокода — шаг 3 из 6</b>\n\n"
+        f"<b>Размер скидки</b> ({type_desc})\n\n"
+        f"Введите число без знака {unit}.\n"
+        f"Пример: <code>20</code> (для 20{unit}) или <code>500</code> (для 500{unit})",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="Отмена", callback_data="admin_promo_list")
@@ -5127,9 +5143,11 @@ async def admin_promo_discount_value(message: Message, state: FSMContext):
         return
     await state.update_data(promo_value=val)
     await message.answer(
-        "Введите срок действия промокода — дату и время истечения.\n\n"
-        "Формат: <code>31.12.2026 23:59</code>\n"
-        "Или введите <code>нет</code> — промокод будет бессрочным.",
+        "🎟 <b>Создание промокода — шаг 4 из 6</b>\n\n"
+        "<b>Срок действия</b>\n"
+        "До какой даты ученики смогут активировать промокод?\n\n"
+        "Введите дату в формате: <code>31.12.2026 23:59</code>\n"
+        "Или нажмите «Бессрочный» — промокод будет работать без ограничения по времени.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="Бессрочный", callback_data="promo_until_none")
@@ -5142,9 +5160,13 @@ async def admin_promo_discount_value(message: Message, state: FSMContext):
 async def admin_promo_until_none(callback: CallbackQuery, state: FSMContext):
     await state.update_data(promo_until=None)
     await callback.message.edit_text(
-        "Срок действия: бессрочно.\n\n"
-        "Введите максимальное количество использований промокода (число),\n"
-        "или нажмите «Без ограничений»:",
+        "🎟 <b>Создание промокода — шаг 5 из 6</b>\n\n"
+        "<b>Лимит активаций</b>\n"
+        "Сколько раз этот промокод можно активировать (разными учениками)?\n\n"
+        "Введите число. Например: <code>10</code> — первые 10 учеников смогут его использовать.\n\n"
+        "Или нажмите «Без ограничений» — любое количество учеников.\n\n"
+        "⚠️ Каждый ученик может использовать промокод только 1 раз.",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="Без ограничений", callback_data="promo_uses_none")
         ]]),
@@ -5178,9 +5200,14 @@ async def admin_promo_valid_until(message: Message, state: FSMContext):
         await state.update_data(promo_until=parsed)
         until_display = parsed
     await message.answer(
-        f"Срок действия: {until_display}\n\n"
-        "Введите максимальное количество использований (число),\n"
-        "или нажмите «Без ограничений»:",
+        f"✅ Срок действия: {until_display}\n\n"
+        "🎟 <b>Создание промокода — шаг 5 из 6</b>\n\n"
+        "<b>Лимит активаций</b>\n"
+        "Сколько раз этот промокод можно активировать (разными учениками)?\n\n"
+        "Введите число. Например: <code>10</code> — первые 10 учеников смогут его использовать.\n\n"
+        "Или нажмите «Без ограничений» — любое количество учеников.\n\n"
+        "⚠️ Каждый ученик может использовать промокод только 1 раз.",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="Без ограничений", callback_data="promo_uses_none")
         ]]),
@@ -5213,16 +5240,22 @@ async def admin_promo_max_uses(message: Message, state: FSMContext):
 
 
 async def _ask_promo_applies_to(msg, state: FSMContext, edit: bool = False):
-    text = "На что распространяется промокод?"
+    text = (
+        "🎟 <b>Создание промокода — шаг 6 из 6</b>\n\n"
+        "<b>На что распространяется скидка?</b>\n\n"
+        "• <b>Только разовые занятия</b> — скидка при оплате одного урока\n"
+        "• <b>Только пакеты занятий</b> — скидка при покупке пакета (6, 12 уроков и т.д.)\n"
+        "• <b>Разовые + пакеты</b> — скидка на любой вид оплаты"
+    )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔢 Только разовые", callback_data="promo_applies_single")],
-        [InlineKeyboardButton(text="📦 Только пакеты", callback_data="promo_applies_packages")],
+        [InlineKeyboardButton(text="🔢 Только разовые занятия", callback_data="promo_applies_single")],
+        [InlineKeyboardButton(text="📦 Только пакеты занятий", callback_data="promo_applies_packages")],
         [InlineKeyboardButton(text="✅ Разовые + пакеты", callback_data="promo_applies_all")],
     ])
     if edit:
-        await msg.edit_text(text, reply_markup=kb)
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
     else:
-        await msg.answer(text, reply_markup=kb)
+        await msg.answer(text, parse_mode="HTML", reply_markup=kb)
     await state.set_state(AdminStates.waiting_promo_applies_to)
 
 
@@ -5238,16 +5271,17 @@ async def admin_promo_applies_to(callback: CallbackQuery, state: FSMContext):
 
 async def _ask_promo_assign_student(msg, state: FSMContext, edit: bool = False):
     text = (
-        "Введите имя ученика, которому назначить промокод,\n"
-        "или нажмите «Пропустить» (промокод создаётся без назначения):"
+        "🎟 <b>Создание промокода — назначение ученику (необязательно)</b>\n\n"
+        "Если промокод предназначен конкретному ученику — введите его имя, и он будет автоматически активирован.\n\n"
+        "Если промокод общий (для всех, кто сам введёт код) — нажмите «Пропустить»."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Пропустить", callback_data="promo_assign_skip")
+        InlineKeyboardButton(text="Пропустить — общий промокод", callback_data="promo_assign_skip")
     ]])
     if edit:
-        await msg.edit_text(text, reply_markup=kb)
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
     else:
-        await msg.answer(text, reply_markup=kb)
+        await msg.answer(text, parse_mode="HTML", reply_markup=kb)
     await state.set_state(AdminStates.waiting_promo_assign_student)
 
 
