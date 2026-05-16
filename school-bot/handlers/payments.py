@@ -145,6 +145,54 @@ def _build_payment_type_kb(has_debt: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _build_direction_choice_kb(directions: list, back_cb: str = "back_to_menu") -> InlineKeyboardMarkup:
+    rows = []
+    for d in directions:
+        direction_id, teacher_name, subject_name, lesson_balance, _ = d
+        bal_str = f" (долг {abs(lesson_balance)} зан.)" if lesson_balance < 0 else f" ({lesson_balance} зан.)"
+        rows.append([InlineKeyboardButton(
+            text=f"📚 {subject_name} — {teacher_name}{bal_str}",
+            callback_data=f"pay_direction_{direction_id}",
+        )])
+    rows.append([InlineKeyboardButton(text="← В меню", callback_data=back_cb)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _show_payment_type_choice(callback: CallbackQuery, state: FSMContext, directions: list):
+    """Show single/package choice screen (after direction already selected or only 1 direction)."""
+    debt_directions = [d for d in directions if d[3] < 0]
+    has_debt = bool(debt_directions)
+
+    promo = get_active_promo_for_user(callback.from_user.id)
+    promo_hint = ""
+    if promo and not has_debt:
+        _, code, dtype, dvalue, atp = promo
+        unit = "%" if dtype == "percent" else "₽"
+        scope_map = {0: "разовые занятия", 1: "пакеты занятий", 2: "разовые и пакеты"}
+        scope = scope_map.get(int(atp or 0), "занятия")
+        promo_hint = f"\n\n🎟 Промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) — {scope}"
+
+    if has_debt:
+        debt_lines = "\n".join(
+            f"• {d[2]} — {d[1]}: долг {abs(d[3])} занят{'ие' if abs(d[3]) == 1 else 'ия' if 2 <= abs(d[3]) <= 4 else 'ий'}"
+            for d in debt_directions
+        )
+        text = (
+            "⚠️ <b>У вас есть задолженность по занятиям:</b>\n\n"
+            f"{debt_lines}\n\n"
+            "Для погашения долга переведите нужную сумму и отправьте чек."
+        )
+    else:
+        text = f"Выберите вариант оплаты:{promo_hint}"
+
+    await state.set_state(ApplicationForm.payment_type_choice)
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_build_payment_type_kb(has_debt))
+    except Exception:
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=_build_payment_type_kb(has_debt))
+    await callback.answer()
+
+
 @router.callback_query(ApplicationForm.menu, lambda c: c.data == "menu_paid")
 async def menu_paid(callback: CallbackQuery, state: FSMContext):
     if not _is_private_chat(callback.message):
@@ -162,37 +210,44 @@ async def menu_paid(callback: CallbackQuery, state: FSMContext):
 
     student_id = students[0][0]
     directions = get_student_directions(student_id)
-    debt_directions = [(d[1], d[2], d[3]) for d in directions if d[3] < 0]
 
-    promo = get_active_promo_for_user(callback.from_user.id)
-    promo_hint = ""
-    if promo and not debt_directions:
-        _, code, dtype, dvalue, _ = promo
-        unit = "%" if dtype == "percent" else "₽"
-        scope = "на оплату 1 занятия" if dtype == "percent" else "на занятия и пакеты" if dtype == "fixed_rub" else ""
-        promo_hint = f"\n\nАктивная скидка: промокод <b>{code}</b> (-{int(float(dvalue))}{unit})"
-        if scope:
-            promo_hint += f" ({scope})"
+    if not directions:
+        await callback.answer("❌ У вас нет направлений для оплаты.", show_alert=True)
+        return
 
-    if debt_directions:
-        debt_lines = "\n".join(
-            f"• {subj} — {teacher}: долг {abs(bal)} занят{'ие' if abs(bal) == 1 else 'ия' if 2 <= abs(bal) <= 4 else 'ий'}"
-            for teacher, subj, bal in debt_directions
-        )
-        text = (
-            "⚠️ <b>У вас есть задолженность по занятиям:</b>\n\n"
-            f"{debt_lines}\n\n"
-            "Для погашения долга переведите нужную сумму и отправьте чек."
-        )
-    else:
-        text = f"Выберите вариант оплаты:{promo_hint}"
+    # If multiple directions — let student pick which subject to pay for
+    if len(directions) > 1:
+        await state.update_data(selected_direction_id=None, skip_promo=False)
+        await state.set_state(ApplicationForm.direction_choice)
+        text = "📚 <b>Выберите направление для оплаты:</b>"
+        try:
+            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_build_direction_choice_kb(directions))
+        except Exception:
+            await callback.message.answer(text, parse_mode="HTML", reply_markup=_build_direction_choice_kb(directions))
+        await callback.answer()
+        return
 
-    await state.set_state(ApplicationForm.payment_type_choice)
+    # Single direction — save it and go straight to payment type choice
+    await state.update_data(selected_direction_id=directions[0][0], skip_promo=False)
+    await _show_payment_type_choice(callback, state, directions)
+
+
+@router.callback_query(ApplicationForm.direction_choice, lambda c: c.data.startswith("pay_direction_"))
+async def choose_direction(callback: CallbackQuery, state: FSMContext):
     try:
-        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_build_payment_type_kb(bool(debt_directions)))
-    except Exception:
-        await callback.message.answer(text, parse_mode="HTML", reply_markup=_build_payment_type_kb(bool(debt_directions)))
-    await callback.answer()
+        direction_id = int(callback.data.split("pay_direction_", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка выбора направления.", show_alert=True)
+        return
+
+    students = find_students_by_telegram_id(callback.from_user.id)
+    if not students:
+        await callback.answer("❌ Вы не зарегистрированы.", show_alert=True)
+        return
+
+    await state.update_data(selected_direction_id=direction_id, skip_promo=False)
+    directions = get_student_directions(students[0][0])
+    await _show_payment_type_choice(callback, state, directions)
 
 
 async def _show_payment_details(
@@ -209,6 +264,11 @@ async def _show_payment_details(
     discount_percent = get_active_invitee_discount_percent(student_id)
     promo = get_active_promo_for_user(callback.from_user.id)
 
+    fsm_data = await state.get_data()
+    skip_promo = fsm_data.get("skip_promo", False)
+    if skip_promo:
+        promo = None
+
     discount_block = ""
     if discount_percent:
         discount_block = (
@@ -217,20 +277,28 @@ async def _show_payment_details(
             "скидка сгорает после первой подтверждённой оплаты.\n"
         )
 
+    has_promo_but_skipped = skip_promo and bool(get_active_promo_for_user(callback.from_user.id))
+
     promo_block = ""
     if promo and payment_type != "debt":
         _, code, dtype, dvalue, applies_to_packages = promo
         unit = "%" if dtype == "percent" else "₽"
         promo_only_packages = int(applies_to_packages or 0) == 1
+        promo_only_single = int(applies_to_packages or 0) == 0
         if promo_only_packages and payment_type == "single":
             promo_block = f"\n🎟 Промокод <b>{code}</b> действует только на пакеты занятий.\n"
-            promo = None  # не применяем скидку к разовому
+            promo = None
+        elif promo_only_single and payment_type == "package":
+            promo_block = f"\n🎟 Промокод <b>{code}</b> действует только на разовые занятия.\n"
+            promo = None
         elif payment_type == "single" and LESSON_PRICE:
             promo_block = f"\n🎟 Применён промокод <b>{code}</b> ({int(float(dvalue))}{unit})\n"
         elif payment_type == "package":
             promo_block = f"\n🎟 Применён промокод <b>{code}</b>: скидка {int(float(dvalue))}{unit}\n"
         else:
             promo_block = f"\n🎟 <b>Промокод {code}: скидка {int(float(dvalue))}{unit}</b> применится к этому платежу.\n"
+    elif has_promo_but_skipped and payment_type != "debt":
+        promo_block = "\n🎟 Промокод не применяется к этому платежу.\n"
 
     # For packages, pass package_price via debt_lessons slot
     price_block = _calc_price_block(payment_type, promo, package_price if payment_type == "package" else debt_lessons)
@@ -238,12 +306,21 @@ async def _show_payment_details(
     payment_text = _build_payment_details_text(discount_block, promo_block, price_block, payment_type_label)
 
     detail_buttons = []
-    if not promo and payment_type != "debt":
+    active_promo = get_active_promo_for_user(callback.from_user.id)
+    if active_promo and not skip_promo and payment_type != "debt":
+        detail_buttons.append([InlineKeyboardButton(text="🚫 Оплатить без промокода", callback_data="pay_skip_promo")])
+    elif not active_promo and not skip_promo and payment_type != "debt":
         detail_buttons.append([InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")])
     detail_buttons.append([InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")])
     detail_kb = InlineKeyboardMarkup(inline_keyboard=detail_buttons)
 
-    await state.update_data(payment_type=payment_type, payment_type_label=payment_type_label)
+    await state.update_data(
+        payment_type=payment_type,
+        payment_type_label=payment_type_label,
+        _last_payment_type=payment_type,
+        _last_package_price=package_price,
+        _last_debt_lessons=debt_lessons,
+    )
     await state.set_state(ApplicationForm.payment_proof)
     await callback.answer()
 
@@ -268,6 +345,19 @@ async def _show_payment_details(
             await callback.message.edit_text(payment_text, parse_mode="HTML", reply_markup=detail_kb)
         except Exception:
             await callback.message.answer(payment_text, parse_mode="HTML", reply_markup=detail_kb)
+
+
+@router.callback_query(ApplicationForm.payment_proof, lambda c: c.data == "pay_skip_promo")
+async def pay_skip_promo(callback: CallbackQuery, state: FSMContext):
+    """Re-render payment details without the promo applied."""
+    fsm_data = await state.get_data()
+    await state.update_data(skip_promo=True)
+    payment_type = fsm_data.get("_last_payment_type", "single")
+    payment_type_label = fsm_data.get("payment_type_label", "")
+    package_price = fsm_data.get("_last_package_price", 0)
+    debt_lessons = fsm_data.get("_last_debt_lessons", 0)
+    await _show_payment_details(callback, state, payment_type, payment_type_label,
+                                debt_lessons=debt_lessons, package_price=package_price)
 
 
 @router.callback_query(lambda c: c.data == "debt_notify_pay")
