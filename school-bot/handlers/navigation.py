@@ -692,9 +692,19 @@ async def enter_promo_code_input(message: Message, state: FSMContext):
     student_id = students[0][0]
     code = (message.text or "").strip().upper()
     if not code:
-        await message.answer("Введите текст промокода.")
         return
+
+    # Delete previous bot prompt to keep chat clean
+    data = await state.get_data()
+    prev_id = data.get("_flow_msg_id")
+    if prev_id:
+        try:
+            await message.bot.delete_message(message.chat.id, prev_id)
+        except Exception:
+            pass
+
     ok, result = apply_promo_code_for_student(student_id, code)
+
     if ok:
         dtype, dvalue = result.split(":", 1)
         unit = "%" if dtype == "percent" else "₽"
@@ -702,27 +712,46 @@ async def enter_promo_code_input(message: Message, state: FSMContext):
             f"✅ Промокод <b>{code}</b> активирован!\n"
             f"Скидка {int(float(dvalue))}{unit} будет применена при следующей оплате."
         )
-    elif result == "not_found":
-        text = f"❌ Промокод <b>{code}</b> не найден. Проверьте правильность написания."
-    elif result == "inactive":
-        text = f"❌ Промокод <b>{code}</b> деактивирован."
-    elif result == "expired":
-        text = f"❌ Срок действия промокода <b>{code}</b> истёк."
-    elif result == "limit_reached":
-        text = f"❌ Промокод <b>{code}</b> исчерпал лимит использований."
-    elif result == "already_assigned":
+        await state.set_state(ApplicationForm.menu)
+        await message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💳 Оплатить занятия", callback_data="menu_paid")],
+                [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+            ]),
+        )
+        return
+
+    if result == "already_assigned":
         text = f"✅ Промокод <b>{code}</b> уже применён к вашему аккаунту."
-    else:
-        text = "⚠️ Произошла ошибка. Попробуйте позже или обратитесь к администратору."
-    await state.set_state(ApplicationForm.menu)
-    await message.answer(
-        text,
+        await state.set_state(ApplicationForm.menu)
+        await message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+            ]),
+        )
+        return
+
+    # Error — stay in entering_promo_code so user can retry
+    error_lines = {
+        "not_found": f"❌ Промокод <b>{code}</b> не найден. Проверьте написание.",
+        "inactive": f"❌ Промокод <b>{code}</b> деактивирован.",
+        "expired": f"❌ Срок действия промокода <b>{code}</b> истёк.",
+        "limit_reached": f"❌ Промокод <b>{code}</b> исчерпал лимит использований.",
+    }
+    error_text = error_lines.get(result, "⚠️ Произошла ошибка. Попробуйте позже.")
+    promo_prompt_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")
+    ]])
+    sent = await message.answer(
+        f"{error_text}\n\n🎟 Введите другой промокод или вернитесь в меню:",
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплатить занятия", callback_data="menu_paid")],
-            [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
-        ]),
+        reply_markup=promo_prompt_kb,
     )
+    await state.update_data(_flow_msg_id=sent.message_id)
 
 
 @router.callback_query(lambda c: c.data == "faq_referral")

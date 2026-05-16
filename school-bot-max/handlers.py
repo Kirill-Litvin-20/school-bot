@@ -533,6 +533,14 @@ async def _process_payment_file(
         ext = "pdf" if file_type == "pdf" else "jpg"
         input_file = BufferedInputFile(file_bytes, filename=f"receipt.{ext}")
 
+        state, fsm_data = get_max_fsm_state(user_id)
+        payment_type_label = (fsm_data or {}).get("payment_type_label", "")
+        _raw_pt = (fsm_data or {}).get("payment_type", "")
+        # Normalize payload-style keys (pay_single, pay_debt) to canonical types
+        _pt_map = {"pay_single": "single", "pay_debt": "debt", "pay_package": "package",
+                   "single": "single", "debt": "debt", "package": "package"}
+        payment_type_canonical = _pt_map.get(_raw_pt) or None
+
         payment_request_id = create_payment_request_max(
             max_user_id=user_id,
             max_username=username,
@@ -540,10 +548,8 @@ async def _process_payment_file(
             caption_text=caption,
             file_id="pending",
             file_type=file_type,
+            payment_type=payment_type_canonical,
         )
-
-        state, fsm_data = get_max_fsm_state(user_id)
-        payment_type_label = (fsm_data or {}).get("payment_type_label", "")
         promo = get_active_promo_for_max_user(user_id)
         promo_line = ""
         if promo:
@@ -820,6 +826,7 @@ async def _dispatch_callback(
             promo_block = f"\n🎟 Применён промокод {code} ({int(float(dvalue))}{unit})\n"
 
         data["payment_type_label"] = payment_type_label
+        data["payment_type"] = payload  # "pay_single", "pay_debt" — normalized below
         set_max_fsm_state(user_id, PAYMENT_PROOF, data)
         payment_kb = None if (promo or payload == "pay_debt") else keyboard([btn("🎟 Ввести промокод", "enter_promo")])
         await _reply(
@@ -845,6 +852,7 @@ async def _dispatch_callback(
         if not PACKAGE_PRICES:
             # No packages configured — treat as before
             data["payment_type_label"] = "📦 Пакет занятий"
+            data["payment_type"] = "package"
             set_max_fsm_state(user_id, PAYMENT_PROOF, data)
             await _reply(
                 api, user_id, message_id,
@@ -902,6 +910,7 @@ async def _dispatch_callback(
                 promo_block = f"\n🎟 Промокод {code} не применяется к пакетам занятий.\n"
 
         data["payment_type_label"] = payment_type_label
+        data["payment_type"] = "package"
         set_max_fsm_state(user_id, PAYMENT_PROOF, data)
         await _reply(
             api, user_id, message_id,

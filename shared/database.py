@@ -561,6 +561,7 @@ def init_db():
     )
     """)
 
+    _ensure_balance_history_columns(cur)
     _ensure_postgres_bigint_columns(cur)
     _ensure_promo_codes_columns(cur)
     _cleanup_teacher_profiles_for_non_teacher_users(cur)
@@ -569,6 +570,19 @@ def init_db():
     conn.close()
     if _is_truthy_env(os.getenv("SCHOOL_SEED_TEACHERS_FROM_CATALOG", "0")):
         sync_teachers_from_catalog()
+
+
+def _ensure_balance_history_columns(cur):
+    """Add missing columns to balance_history (migration safety)."""
+    if USE_POSTGRES:
+        cur.execute(
+            "ALTER TABLE balance_history ADD COLUMN IF NOT EXISTS payment_request_id BIGINT"
+        )
+    else:
+        cur.execute("PRAGMA table_info(balance_history)")
+        existing = {row[1] for row in cur.fetchall()}
+        if "payment_request_id" not in existing:
+            cur.execute("ALTER TABLE balance_history ADD COLUMN payment_request_id INTEGER")
 
 
 def _ensure_promo_codes_columns(cur):
@@ -593,8 +607,8 @@ def _ensure_promo_codes_columns(cur):
             cur.execute("ALTER TABLE promo_codes ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
         if "created_at" not in existing:
             cur.execute("ALTER TABLE promo_codes ADD COLUMN created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP")
-        if "archived" not in existing:
-            cur.execute("ALTER TABLE promo_codes ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+        # Use IF NOT EXISTS so reruns don't fail on already-existing columns
+        cur.execute("ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS archived INTEGER NOT NULL DEFAULT 0")
         # Make created_by and created_at nullable (old schema had them NOT NULL without defaults)
         cur.execute("""
             SELECT is_nullable FROM information_schema.columns
@@ -611,8 +625,6 @@ def _ensure_promo_codes_columns(cur):
         if row and (row[0] == "NO" or not row[1]):
             cur.execute("ALTER TABLE promo_codes ALTER COLUMN created_at DROP NOT NULL")
             cur.execute("ALTER TABLE promo_codes ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP")
-        if "archived" not in existing:
-            cur.execute("ALTER TABLE promo_codes ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
     else:
         cur.execute("PRAGMA table_info(promo_codes)")
         existing = {row[1] for row in cur.fetchall()}
@@ -712,14 +724,27 @@ def _ensure_users_table_columns(cur: sqlite3.Cursor):
 
 
 def _ensure_payment_requests_columns(cur: sqlite3.Cursor):
-    cur.execute("PRAGMA table_info(payment_requests)")
-    existing_columns = {row[1] for row in cur.fetchall()}
-    if "source_platform" not in existing_columns:
+    if USE_POSTGRES:
         cur.execute(
-            "ALTER TABLE payment_requests ADD COLUMN source_platform TEXT NOT NULL DEFAULT 'telegram'"
+            "ALTER TABLE payment_requests ADD COLUMN IF NOT EXISTS source_platform TEXT NOT NULL DEFAULT 'telegram'"
         )
-    if "max_user_id" not in existing_columns:
-        cur.execute("ALTER TABLE payment_requests ADD COLUMN max_user_id INTEGER")
+        cur.execute(
+            "ALTER TABLE payment_requests ADD COLUMN IF NOT EXISTS max_user_id BIGINT"
+        )
+        cur.execute(
+            "ALTER TABLE payment_requests ADD COLUMN IF NOT EXISTS payment_type TEXT"
+        )
+    else:
+        cur.execute("PRAGMA table_info(payment_requests)")
+        existing_columns = {row[1] for row in cur.fetchall()}
+        if "source_platform" not in existing_columns:
+            cur.execute(
+                "ALTER TABLE payment_requests ADD COLUMN source_platform TEXT NOT NULL DEFAULT 'telegram'"
+            )
+        if "max_user_id" not in existing_columns:
+            cur.execute("ALTER TABLE payment_requests ADD COLUMN max_user_id INTEGER")
+        if "payment_type" not in existing_columns:
+            cur.execute("ALTER TABLE payment_requests ADD COLUMN payment_type TEXT")
 
 
 def _ensure_postgres_bigint_columns(cur):
@@ -1870,7 +1895,8 @@ def create_payment_request(
     telegram_full_name: str | None,
     caption_text: str | None,
     file_id: str,
-    file_type: str
+    file_type: str,
+    payment_type: str | None = None,
 ):
     conn = get_connection()
     cur = conn.cursor()
@@ -1885,10 +1911,11 @@ def create_payment_request(
             file_id,
             file_type,
             status,
+            payment_type,
             created_at,
             updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
         """,
         (
             telegram_user_id,
@@ -1897,6 +1924,7 @@ def create_payment_request(
             caption_text,
             file_id,
             file_type,
+            payment_type,
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         )
@@ -2244,8 +2272,8 @@ def finalize_payment_with_topup(
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cur.execute(
             """
-            INSERT INTO balance_history (student_lesson_id, operation_type, lessons_delta, comment, created_at, created_by)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO balance_history (student_lesson_id, operation_type, lessons_delta, comment, created_at, created_by, payment_request_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 direction_id,
@@ -2253,7 +2281,8 @@ def finalize_payment_with_topup(
                 lessons_count,
                 comment or f"Начисление после подтверждения оплаты #{payment_request_id}",
                 now,
-                admin_id
+                admin_id,
+                payment_request_id,
             )
         )
 
@@ -5242,6 +5271,7 @@ def create_payment_request_max(
     caption_text: str | None,
     file_id: str,
     file_type: str,
+    payment_type: str | None = None,
 ) -> int:
     """Create a payment request originating from MAX messenger."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -5254,9 +5284,9 @@ def create_payment_request_max(
         INSERT INTO payment_requests (
             telegram_user_id, telegram_username, telegram_full_name,
             caption_text, file_id, file_type, status,
-            source_platform, max_user_id, created_at, updated_at
+            source_platform, max_user_id, payment_type, created_at, updated_at
         )
-        VALUES (NULL, ?, ?, ?, ?, ?, 'pending', 'max', ?, ?, ?)
+        VALUES (NULL, ?, ?, ?, ?, ?, 'pending', 'max', ?, ?, ?, ?)
         """,
         (
             display_username,
@@ -5265,6 +5295,7 @@ def create_payment_request_max(
             file_id,
             file_type,
             max_user_id,
+            payment_type,
             now,
             now,
         ),
@@ -5622,10 +5653,37 @@ def deactivate_promo_code(promo_id: int) -> bool:
     return True
 
 
-def get_revenue_by_period() -> dict:
-    """Return revenue stats grouped by week and month for the revenue sheet."""
+def _load_package_prices_from_env() -> dict:
+    """Parse PACKAGE_PRICES env var (format: '4:5000,8:9000') into {lessons: price}."""
+    raw = os.getenv("PACKAGE_PRICES", "").strip()
+    result: dict[int, int] = {}
+    if not raw:
+        return result
+    for part in raw.split(","):
+        part = part.strip()
+        if ":" in part:
+            try:
+                k, v = part.split(":", 1)
+                result[int(k.strip())] = int(v.strip())
+            except (ValueError, TypeError):
+                pass
+    return result
+
+
+def get_revenue_by_period(package_prices: dict | None = None) -> dict:
+    """Return revenue stats grouped by week and month for the revenue sheet.
+
+    Each week/month dict now includes:
+      - lessons: total attended lessons (from attendance table)
+      - single_lessons: balance_history topups where payment_type='single' or NULL
+      - package_lessons: balance_history topups where payment_type='package'
+      - package_revenue: sum of actual package prices for package topups
+    """
     conn = get_connection()
     cur = conn.cursor()
+    if package_prices is None:
+        package_prices = _load_package_prices_from_env()
+    package_prices = package_prices or {}
 
     if USE_POSTGRES:
         week_sql = """
@@ -5649,6 +5707,27 @@ def get_revenue_by_period() -> dict:
             ORDER BY month_key DESC
             LIMIT 6
         """
+        # Balance history grouped by week (using created_at)
+        bh_week_sql = """
+            SELECT
+                TO_CHAR(bh.created_at::timestamp, 'IYYY-IW') AS week_key,
+                COALESCE(pr.payment_type, 'single') AS ptype,
+                bh.lessons_delta
+            FROM balance_history bh
+            LEFT JOIN payment_requests pr ON pr.id = bh.payment_request_id
+            WHERE bh.operation_type = 'manual_topup'
+              AND bh.lessons_delta > 0
+        """
+        bh_month_sql = """
+            SELECT
+                TO_CHAR(bh.created_at::timestamp, 'YYYY-MM') AS month_key,
+                COALESCE(pr.payment_type, 'single') AS ptype,
+                bh.lessons_delta
+            FROM balance_history bh
+            LEFT JOIN payment_requests pr ON pr.id = bh.payment_request_id
+            WHERE bh.operation_type = 'manual_topup'
+              AND bh.lessons_delta > 0
+        """
     else:
         week_sql = """
             SELECT
@@ -5671,15 +5750,86 @@ def get_revenue_by_period() -> dict:
             ORDER BY month_key DESC
             LIMIT 6
         """
+        bh_week_sql = """
+            SELECT
+                strftime('%Y-W%W', bh.created_at) AS week_key,
+                COALESCE(pr.payment_type, 'single') AS ptype,
+                bh.lessons_delta
+            FROM balance_history bh
+            LEFT JOIN payment_requests pr ON pr.id = bh.payment_request_id
+            WHERE bh.operation_type = 'manual_topup'
+              AND bh.lessons_delta > 0
+        """
+        bh_month_sql = """
+            SELECT
+                strftime('%Y-%m', bh.created_at) AS month_key,
+                COALESCE(pr.payment_type, 'single') AS ptype,
+                bh.lessons_delta
+            FROM balance_history bh
+            LEFT JOIN payment_requests pr ON pr.id = bh.payment_request_id
+            WHERE bh.operation_type = 'manual_topup'
+              AND bh.lessons_delta > 0
+        """
+
+    # Build balance_history breakdown dicts: {period_key: {single_lessons, package_lessons, package_revenue}}
+    def _build_bh_dict(sql):
+        cur.execute(sql)
+        result: dict = {}
+        for row in cur.fetchall():
+            key, ptype, delta = str(row[0]), str(row[1]), int(row[2])
+            if key not in result:
+                result[key] = {"single_lessons": 0, "package_lessons": 0, "package_revenue": 0}
+            if ptype == "package":
+                result[key]["package_lessons"] += delta
+                result[key]["package_revenue"] += package_prices.get(delta, 0)
+            else:
+                result[key]["single_lessons"] += delta
+        return result
+
+    bh_weeks = _build_bh_dict(bh_week_sql)
+    bh_months = _build_bh_dict(bh_month_sql)
 
     cur.execute(week_sql)
-    weeks = [{"week_key": str(r[0]), "week_start": str(r[1]), "lessons": r[2]} for r in cur.fetchall()]
+    weeks = []
+    for r in cur.fetchall():
+        wk = str(r[0])
+        bh = bh_weeks.get(wk, {"single_lessons": 0, "package_lessons": 0, "package_revenue": 0})
+        weeks.append({
+            "week_key": wk,
+            "week_start": str(r[1]),
+            "lessons": r[2],
+            "single_lessons": bh["single_lessons"],
+            "package_lessons": bh["package_lessons"],
+            "package_revenue": bh["package_revenue"],
+        })
 
     cur.execute(month_sql)
-    months = [{"month_key": str(r[0]), "lessons": r[1]} for r in cur.fetchall()]
+    months = []
+    for r in cur.fetchall():
+        mk = str(r[0])
+        bh = bh_months.get(mk, {"single_lessons": 0, "package_lessons": 0, "package_revenue": 0})
+        months.append({
+            "month_key": mk,
+            "lessons": r[1],
+            "single_lessons": bh["single_lessons"],
+            "package_lessons": bh["package_lessons"],
+            "package_revenue": bh["package_revenue"],
+        })
 
     cur.execute("SELECT COUNT(*) FROM attendance WHERE status IN ('present', 'completed')")
     total = cur.fetchone()[0] or 0
 
+    # Aggregate totals from balance_history across all time
+    total_single = sum(v["single_lessons"] for v in bh_weeks.values())
+    total_package = sum(v["package_lessons"] for v in bh_weeks.values())
+    total_package_revenue = sum(v["package_revenue"] for v in bh_weeks.values())
+
     conn.close()
-    return {"weeks": weeks, "months": months, "total": total}
+    return {
+        "weeks": weeks,
+        "months": months,
+        "total": total,
+        "total_single": total_single,
+        "total_package": total_package,
+        "total_package_revenue": total_package_revenue,
+    }

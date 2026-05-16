@@ -397,6 +397,10 @@ async def get_payment_proof(message: Message, state: FSMContext):
         )
         return
 
+    fsm_data = await state.get_data()
+    payment_type = fsm_data.get("payment_type")
+    payment_type_label = fsm_data.get("payment_type_label")
+
     payment_request_id = create_payment_request(
         telegram_user_id=message.from_user.id,
         telegram_username=username,
@@ -404,6 +408,7 @@ async def get_payment_proof(message: Message, state: FSMContext):
         caption_text=caption_text,
         file_id=file_id,
         file_type=file_type,
+        payment_type=payment_type,
     )
 
     students_for_discount = find_students_by_telegram_id(message.from_user.id)
@@ -417,9 +422,6 @@ async def get_payment_proof(message: Message, state: FSMContext):
         _, code, dtype, dvalue, _ = promo
         unit = "%" if dtype == "percent" else "₽"
         promo_label = f"{code} (-{int(dvalue)}{unit})"
-
-    fsm_data = await state.get_data()
-    payment_type_label = fsm_data.get("payment_type_label")
 
     payment_text = build_payment_caption(
         payment_request_id=payment_request_id,

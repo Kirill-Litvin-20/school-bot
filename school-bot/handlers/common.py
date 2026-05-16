@@ -46,7 +46,14 @@ async def flow_message(
     reply_markup=None,
     parse_mode: str | None = None,
 ) -> None:
-    """Send a new flow message and save its ID to FSM state."""
+    """Delete previous bot prompt, send new one, save its ID to FSM state."""
+    data = await state.get_data()
+    prev_id = data.get("_flow_msg_id")
+    if prev_id:
+        try:
+            await message.bot.delete_message(message.chat.id, prev_id)
+        except Exception:
+            pass
     sent = await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
     await state.update_data(_flow_msg_id=sent.message_id)
 
