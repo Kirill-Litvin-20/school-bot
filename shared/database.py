@@ -4957,26 +4957,31 @@ def sheets_outbox_increment_attempts(outbox_id: int, error: str) -> None:
 # ---------------------------------------------------------------------------
 
 def get_weekly_payouts(weeks: int = 8) -> list[dict]:
-    """Return per-teacher lesson counts for the last N complete Mon–Sun weeks.
+    """Return per-teacher lesson counts.
 
-    Returns list of dicts, most recent week first:
-      {week_start, week_end, teachers: [{name, lessons}], total_lessons}
+    First entry = current (possibly incomplete) week.
+    Then N completed Mon–Sun weeks, most recent first.
+
+    Returns list of dicts:
+      {week_start, week_end, teachers: [{name, lessons, payment_details}],
+       total_lessons, is_current}
     """
     from datetime import date as _date
     conn = get_connection()
     cur = conn.cursor()
 
     today = _date.today()
-    # Most recent complete Sunday
-    last_sunday = today - timedelta(days=(today.weekday() + 1) % 7)
-    last_monday = last_sunday - timedelta(days=6)
+    # Current week starts on Monday
+    current_monday = today - timedelta(days=today.weekday())
 
     result = []
-    for i in range(weeks):
-        w_start = last_monday - timedelta(weeks=i)
+    # i=0 → current week; i=1..weeks → past complete weeks
+    for i in range(weeks + 1):
+        w_start = current_monday - timedelta(weeks=i)
         w_end = w_start + timedelta(days=6)
         start_dt = f"{w_start.isoformat()} 00:00:00"
         end_dt = f"{w_end.isoformat()} 23:59:59"
+        is_current = (i == 0)
 
         cur.execute(
             """
@@ -4992,13 +4997,15 @@ def get_weekly_payouts(weeks: int = 8) -> list[dict]:
             (start_dt, end_dt),
         )
         rows = cur.fetchall()
-        if rows:
-            teachers = [{"name": r[0], "lessons": int(r[1]), "payment_details": r[2] or ""} for r in rows]
+        teachers = [{"name": r[0], "lessons": int(r[1]), "payment_details": r[2] or ""} for r in rows]
+        # Always include current week (even if empty), past weeks only if have data
+        if teachers or is_current:
             result.append({
                 "week_start": w_start.isoformat(),
                 "week_end": w_end.isoformat(),
                 "teachers": teachers,
                 "total_lessons": sum(t["lessons"] for t in teachers),
+                "is_current": is_current,
             })
 
     conn.close()
