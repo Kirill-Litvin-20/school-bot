@@ -142,38 +142,36 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
     positive = sum(d[3] for d in directions if d[3] > 0)
     debt = sum(-d[3] for d in directions if d[3] < 0)
 
-    lines = [
-        "╔══════════════════════════╗",
-        "  👤 ЛИЧНЫЙ КАБИНЕТ",
-        "╚══════════════════════════╝",
-        "",
-        f"👋 {student_name}",
-        "",
-        "📊 Сводка",
-        f"   • Занятий на балансе: {positive}",
-    ]
+    lines = [f"👤 {student_name}", ""]
+
     if debt > 0:
-        lines.append(f"   • Задолженность: {debt} занятий ⚠️")
+        lines.append(f"🔴 Долг: {debt} зан.   |   ✅ Баланс: {positive} зан.")
     else:
-        lines.append("   • Задолженность: нет ✅")
+        lines.append(f"✅ Баланс: {positive} зан.")
+
     if student_id is not None:
         discount_percent = get_active_invitee_discount_percent(student_id)
         if discount_percent:
-            lines.append(f"   • 🎁 Реферальная скидка: {discount_percent}% на первую оплату")
+            lines.append(f"🎁 Реферальная скидка {discount_percent}% на первую оплату")
         promo = get_active_promo_for_student_id(student_id)
         if promo:
             _, code, dtype, dvalue, _ = promo
             unit = "%" if dtype == "percent" else "₽"
-            lines.append(f"   • 🎟 Активный промокод: {code} (скидка {int(dvalue)}{unit})")
+            lines.append(f"🎟 Промокод {code} — скидка {int(float(dvalue))}{unit}")
 
     if directions:
-        lines.extend(["", "📚 Ваши направления"])
-        for i, d in enumerate(directions, 1):
-            _, teacher, subject, balance, tariff = d
-            bal_view = f"долг {-balance} ⚠️" if balance < 0 else f"остаток {balance}"
-            lines.append(f"   {i}. {subject} — {teacher}: {bal_view}")
+        lines.extend(["", "📚 Направления"])
+        for d in directions:
+            _, teacher, subject, balance, _ = d
+            if balance < 0:
+                bal = f"⚠️ долг {-balance} зан."
+            elif balance == 0:
+                bal = "0 зан."
+            else:
+                bal = f"{balance} зан."
+            lines.append(f"  • {subject} ({teacher}) — {bal}")
     else:
-        lines.extend(["", "📚 Ваши направления", "   Активные направления пока не назначены."])
+        lines.extend(["", "📚 Направления ещё не назначены."])
 
     if student_id is not None and directions:
         recent = get_recent_attendance_for_student(student_id, limit=3)
@@ -182,24 +180,19 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
             for entry in recent:
                 date_view = (entry["lesson_date"] or "—")[:10]
                 lines.append(
-                    f"   • {date_view} {entry['subject_name']}: "
+                    f"  • {date_view} — {entry['subject_name']}: "
                     f"{_format_attendance_status(entry['status'])}"
                 )
 
-    lines.extend(["", "💳 Последние оплаты"])
-    if not payments:
-        lines.append("   История оплат пока отсутствует.")
-    else:
-        for p in payments:
+    if payments:
+        lines.extend(["", "💳 Последние оплаты"])
+        for p in payments[:4]:
             pid, status, caption, created_at, _, lessons = p
-            lines.append(
-                f"   • Оплата #{pid} — {_format_payment_status(status)}\n"
-                f"     Дата: {created_at[:10]}  Начислено: {lessons}"
-            )
+            date_view = str(created_at)[:10] if created_at else "—"
+            lessons_str = f" (+{lessons} зан.)" if lessons else ""
+            lines.append(f"  • #{pid} {date_view}: {_format_payment_status(status)}{lessons_str}")
 
-    lines.extend(["", "Написать администратору: https://t.me/integral_school_ru"])
     return "\n".join(lines)
-
 
 def _build_application_text(data: dict) -> str:
     teacher_text = data.get("teacher_choice", "—")
@@ -387,7 +380,7 @@ async def handle_text(
     text = text.strip()
 
     # ── /start / /menu commands ──────────────────────────────────────────
-    if text in ("/start", "/menu"):
+    if text in ("/start", "/menu") or state == MENU:
         await handle_bot_started(api, user_id, name, username)
         return
 
@@ -448,7 +441,8 @@ async def handle_text(
         student_id = students[0][0]
         ok, result = apply_promo_code_for_student(student_id, code)
         if ok:
-            dtype, dvalue = result.split(":", 1)
+            parts = result.split(":")
+            dtype, dvalue = parts[0], parts[1]
             unit = "%" if dtype == "percent" else "₽"
             msg = (
                 f"✅ Промокод {code} активирован!\n"
@@ -475,6 +469,7 @@ async def handle_text(
         await api.send_message(
             user_id,
             "📸 Пожалуйста, отправьте фото или PDF-файл чека об оплате.",
+            keyboard([btn("← В меню", "back_to_menu")]),
         )
 
     else:
