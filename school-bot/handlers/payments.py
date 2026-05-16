@@ -193,12 +193,8 @@ async def _show_payment_type_choice(callback: CallbackQuery, state: FSMContext, 
     await callback.answer()
 
 
-@router.callback_query(ApplicationForm.menu, lambda c: c.data == "menu_paid")
-async def menu_paid(callback: CallbackQuery, state: FSMContext):
-    if not _is_private_chat(callback.message):
-        await callback.answer("⚠️ Оплату отправляйте в личном чате с ботом.", show_alert=True)
-        return
-
+async def _handle_pay_entry(callback: CallbackQuery, state: FSMContext):
+    """Shared logic for pay entry from cabinet button or debt notification."""
     students = find_students_by_telegram_id(callback.from_user.id)
     if not students:
         await callback.answer(
@@ -217,11 +213,27 @@ async def menu_paid(callback: CallbackQuery, state: FSMContext):
 
     debt_directions = [d for d in directions if d[3] < 0]
 
-    # If there's debt — go directly to payment details, skip intermediate screens
     if debt_directions:
-        debt_lessons = sum(abs(d[3]) for d in debt_directions)
+        debt_lines = "\n".join(
+            f"• {d[2]} — {d[1]}: долг {abs(d[3])} занят{'ие' if abs(d[3]) == 1 else 'ия' if 2 <= abs(d[3]) <= 4 else 'ий'}"
+            for d in debt_directions
+        )
+        text = (
+            "⚠️ <b>У вас есть задолженность по занятиям:</b>\n\n"
+            f"{debt_lines}\n\n"
+            "Для погашения долга переведите нужную сумму и отправьте чек."
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💸 Погасить долг", callback_data="pay_debt")],
+            [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+        ])
         await state.update_data(selected_direction_id=None, skip_promo=False)
-        await _show_payment_details(callback, state, "debt", "💸 Погашение долга", debt_lessons=debt_lessons)
+        await state.set_state(ApplicationForm.payment_type_choice)
+        try:
+            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
+        await callback.answer()
         return
 
     # If multiple directions — let student pick which subject to pay for
@@ -239,6 +251,14 @@ async def menu_paid(callback: CallbackQuery, state: FSMContext):
     # Single direction — save it and go straight to payment type choice
     await state.update_data(selected_direction_id=directions[0][0], skip_promo=False)
     await _show_payment_type_choice(callback, state, directions)
+
+
+@router.callback_query(ApplicationForm.menu, lambda c: c.data == "menu_paid")
+async def menu_paid(callback: CallbackQuery, state: FSMContext):
+    if not _is_private_chat(callback.message):
+        await callback.answer("⚠️ Оплату отправляйте в личном чате с ботом.", show_alert=True)
+        return
+    await _handle_pay_entry(callback, state)
 
 
 @router.callback_query(ApplicationForm.direction_choice, lambda c: c.data.startswith("pay_direction_"))
@@ -371,14 +391,11 @@ async def pay_skip_promo(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(lambda c: c.data == "debt_notify_pay")
 async def debt_notify_pay(callback: CallbackQuery, state: FSMContext):
-    """Called from debt reminder notification button — no specific FSM state required."""
-    students = find_students_by_telegram_id(callback.from_user.id)
-    debt_lessons = 0
-    if students:
-        directions = get_student_directions(students[0][0])
-        debt_lessons = sum(abs(d[3]) for d in directions if d[3] < 0)
-    await state.set_state(ApplicationForm.payment_type_choice)
-    await _show_payment_details(callback, state, "debt", "💸 Погашение долга", debt_lessons=debt_lessons)
+    """Called from debt notification button — same flow as cabinet pay button."""
+    if not _is_private_chat(callback.message):
+        await callback.answer("⚠️ Оплату отправляйте в личном чате с ботом.", show_alert=True)
+        return
+    await _handle_pay_entry(callback, state)
 
 
 @router.callback_query(ApplicationForm.payment_type_choice, lambda c: c.data == "pay_debt")
