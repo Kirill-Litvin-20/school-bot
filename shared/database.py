@@ -644,6 +644,8 @@ def _ensure_teachers_table_columns(cur: sqlite3.Cursor):
         cur.execute("ALTER TABLE teachers ADD COLUMN description TEXT")
     if "photo_path" not in existing_columns:
         cur.execute("ALTER TABLE teachers ADD COLUMN photo_path TEXT")
+    if "payment_details" not in existing_columns:
+        cur.execute("ALTER TABLE teachers ADD COLUMN payment_details TEXT")
 
 
 def _ensure_publication_posts_columns(cur: sqlite3.Cursor):
@@ -3285,6 +3287,7 @@ def delete_student_by_telegram_id(telegram_id: int) -> dict:
 
         cur.execute("DELETE FROM student_lessons WHERE student_id = ?", (student_id,))
         deleted_lessons += cur.rowcount
+        cur.execute("DELETE FROM student_promo_codes WHERE student_id = ?", (student_id,))
 
     cur.execute(
         """
