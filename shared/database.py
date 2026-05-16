@@ -695,6 +695,8 @@ def _ensure_payment_requests_columns(cur):
         )
     if "max_user_id" not in existing_columns:
         cur.execute("ALTER TABLE payment_requests ADD COLUMN max_user_id INTEGER")
+    if "preferred_direction_id" not in existing_columns:
+        cur.execute("ALTER TABLE payment_requests ADD COLUMN preferred_direction_id INTEGER")
 
 
 def _ensure_postgres_bigint_columns(cur):
@@ -1823,7 +1825,8 @@ def create_payment_request(
     telegram_full_name: str | None,
     caption_text: str | None,
     file_id: str,
-    file_type: str
+    file_type: str,
+    preferred_direction_id: int | None = None,
 ):
     conn = get_connection()
     cur = conn.cursor()
@@ -1839,9 +1842,10 @@ def create_payment_request(
             file_type,
             status,
             created_at,
-            updated_at
+            updated_at,
+            preferred_direction_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
         """,
         (
             telegram_user_id,
@@ -1851,7 +1855,8 @@ def create_payment_request(
             file_id,
             file_type,
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            preferred_direction_id,
         )
     )
 
@@ -1869,7 +1874,7 @@ def get_payment_request_by_id(payment_request_id: int):
         """
         SELECT id, telegram_user_id, telegram_username, telegram_full_name,
                caption_text, file_id, file_type, status, approved_by,
-               rejected_by, created_at, updated_at
+               rejected_by, created_at, updated_at, preferred_direction_id
         FROM payment_requests
         WHERE id = ?
         """,

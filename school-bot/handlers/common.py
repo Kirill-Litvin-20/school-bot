@@ -46,7 +46,14 @@ async def flow_message(
     reply_markup=None,
     parse_mode: str | None = None,
 ) -> None:
-    """Send a new flow message and save its ID to FSM state."""
+    """Delete previous bot prompt, send new one, save its ID to FSM state."""
+    data = await state.get_data()
+    prev_id = data.get("_flow_msg_id")
+    if prev_id:
+        try:
+            await message.bot.delete_message(message.chat.id, prev_id)
+        except Exception:
+            pass
     sent = await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
     await state.update_data(_flow_msg_id=sent.message_id)
 
@@ -243,61 +250,65 @@ def build_cabinet_text(
     positive_balance = sum(d[3] for d in directions if d[3] > 0)
     debt_total = sum(-d[3] for d in directions if d[3] < 0)
 
-    lines = [f"👤 <b>{student_name}</b> — Личный кабинет", ""]
+    lines = [f"👤 <b>{student_name}</b>", ""]
 
     # --- Баланс ---
-    balance_icon = "⚠️" if debt_total > 0 else "✅"
-    lines.append(f"<b>Баланс:</b> {positive_balance} занятий {balance_icon}")
     if debt_total > 0:
-        lines.append(f"<b>Долг:</b> {debt_total} занятий")
+        lines.append(f"🔴 <b>Долг:</b> {debt_total} зан.   |   ✅ <b>Баланс:</b> {positive_balance} зан.")
+    else:
+        lines.append(f"✅ <b>Баланс:</b> {positive_balance} зан.")
 
+    # --- Скидки / промокод ---
     if student_id is not None:
         discount_percent = get_active_invitee_discount_percent(student_id)
         if discount_percent:
-            lines.append(f"🎁 Реферальная скидка: <b>{discount_percent}%</b> на первую оплату")
+            lines.append(f"🎁 Реферальная скидка <b>{discount_percent}%</b> на первую оплату")
         promo = get_active_promo_for_student_id(student_id)
         if promo:
             _, code, dtype, dvalue, _ = promo
             unit = "%" if dtype == "percent" else "₽"
-            lines.append(f"🎟 Промокод: <b>{code}</b> (−{int(float(dvalue))}{unit})")
+            lines.append(f"🎟 Промокод <b>{code}</b> — скидка {int(float(dvalue))}{unit}")
 
     # --- Направления ---
-    lines.append("")
     if directions:
-        lines.append("<b>📚 Направления</b>")
+        lines.append("")
+        lines.append("📚 <b>Направления</b>")
         for direction in directions:
-            _, teacher_name, subject_name, lesson_balance, tariff_type = direction
+            _, teacher_name, subject_name, lesson_balance, _ = direction
             if lesson_balance < 0:
-                bal = f"долг {-lesson_balance} ⚠️"
+                bal = f"⚠️ долг {-lesson_balance} зан."
+            elif lesson_balance == 0:
+                bal = "0 зан."
             else:
                 bal = f"{lesson_balance} зан."
-            lines.append(f"• <b>{subject_name}</b> ({teacher_name}): {bal}")
+            lines.append(f"  • {subject_name} <i>({teacher_name})</i> — {bal}")
     else:
-        lines.append("📚 Направления не назначены.")
+        lines.append("")
+        lines.append("📚 Направления ещё не назначены.")
 
-    # --- Посещаемость (компактно) ---
+    # --- Последние занятия (до 3) ---
     if student_id is not None and directions:
         recent = get_recent_attendance_for_student(student_id, limit=3)
         if recent:
             lines.append("")
-            lines.append("<b>🗓 Последние занятия</b>")
+            lines.append("🗓 <b>Последние занятия</b>")
             for entry in recent:
                 date_view = (entry["lesson_date"] or "—")[:10]
                 lines.append(
-                    f"• {date_view} {entry['subject_name']}: "
+                    f"  • {date_view} — {entry['subject_name']}: "
                     f"{_format_attendance_status(entry['status'])}"
                 )
 
-    # --- Оплаты (компактно) ---
+    # --- Последние оплаты (до 2) ---
     if recent_payments:
         lines.append("")
-        lines.append("<b>💳 Последние оплаты</b>")
-        for payment in recent_payments[:3]:
-            payment_id, status, caption_text, created_at, _, lessons_added = payment
+        lines.append("💳 <b>Последние оплаты</b>")
+        for payment in recent_payments[:2]:
+            payment_id, status, _, created_at, _, lessons_added = payment
             date_view = str(created_at)[:10] if created_at else "—"
             status_label = format_payment_status(status)
-            lessons_str = f" +{lessons_added}" if lessons_added else ""
-            lines.append(f"• #{payment_id} {date_view}: {status_label}{lessons_str}")
+            lessons_str = f" (+{lessons_added} зан.)" if lessons_added else ""
+            lines.append(f"  • #{payment_id} {date_view}: {status_label}{lessons_str}")
 
     return "\n".join(lines)
 
@@ -328,6 +339,7 @@ def build_payment_caption(
     referral_discount_percent: int | None = None,
     payment_type_label: str | None = None,
     promo_label: str | None = None,
+    direction_label: str | None = None,
 ) -> str:
     text = (
         f"💳 <b>Оплата #{payment_request_id}</b>\n\n"
@@ -339,6 +351,9 @@ def build_payment_caption(
 
     if payment_type_label:
         text += f"\n💰 <b>Тип оплаты:</b> {payment_type_label}"
+
+    if direction_label:
+        text += f"\n📚 <b>Направление:</b> {direction_label}"
 
     if promo_label:
         text += f"\n🎟 <b>Промокод:</b> {promo_label}"

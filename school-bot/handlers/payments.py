@@ -215,6 +215,15 @@ async def menu_paid(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ У вас нет направлений для оплаты.", show_alert=True)
         return
 
+    debt_directions = [d for d in directions if d[3] < 0]
+
+    # If there's debt — go directly to payment details, skip intermediate screens
+    if debt_directions:
+        debt_lessons = sum(abs(d[3]) for d in debt_directions)
+        await state.update_data(selected_direction_id=None, skip_promo=False)
+        await _show_payment_details(callback, state, "debt", "💸 Погашение долга", debt_lessons=debt_lessons)
+        return
+
     # If multiple directions — let student pick which subject to pay for
     if len(directions) > 1:
         await state.update_data(selected_direction_id=None, skip_promo=False)
@@ -474,6 +483,15 @@ async def get_payment_proof(message: Message, state: FSMContext):
     fsm_data = await state.get_data()
     payment_type_label = fsm_data.get("payment_type_label")
     payment_type = fsm_data.get("payment_type")
+    selected_direction_id = fsm_data.get("selected_direction_id")
+
+    # Resolve direction label from selected direction
+    direction_label = None
+    if selected_direction_id:
+        direction_row = get_student_lesson_by_id(selected_direction_id)
+        if direction_row:
+            _, _, _, subj, _, _, _, teacher = direction_row
+            direction_label = f"{subj} — {teacher}"
 
     payment_request_id = create_payment_request(
         telegram_user_id=message.from_user.id,
@@ -482,6 +500,7 @@ async def get_payment_proof(message: Message, state: FSMContext):
         caption_text=caption_text,
         file_id=file_id,
         file_type=file_type,
+        preferred_direction_id=selected_direction_id,
     )
 
     students_for_discount = find_students_by_telegram_id(message.from_user.id)
@@ -506,6 +525,7 @@ async def get_payment_proof(message: Message, state: FSMContext):
         referral_discount_percent=discount_percent,
         payment_type_label=payment_type_label,
         promo_label=promo_label,
+        direction_label=direction_label,
     )
 
     if file_type == "pdf":
@@ -554,6 +574,7 @@ async def reject_payment_request(callback: CallbackQuery):
         _rejected_by,
         _created_at,
         _updated_at,
+        _preferred_direction_id,
     ) = payment
 
     if status == "approved":
@@ -652,6 +673,7 @@ async def approve_payment_request(callback: CallbackQuery):
         _rejected_by,
         _created_at,
         _updated_at,
+        preferred_direction_id,
     ) = payment
 
     if status == "approved":
@@ -718,8 +740,15 @@ async def approve_payment_request(callback: CallbackQuery):
         referral_discount_percent=discount_percent,
     )
 
-    if len(directions) == 1:
-        direction_id, teacher_name, subject_name, lesson_balance, _ = directions[0]
+    # Auto-select direction: prefer student's choice, fallback to single direction
+    auto_direction = None
+    if preferred_direction_id:
+        auto_direction = next((d for d in directions if d[0] == preferred_direction_id), None)
+    if auto_direction is None and len(directions) == 1:
+        auto_direction = directions[0]
+
+    if auto_direction is not None:
+        direction_id, teacher_name, subject_name, lesson_balance, _ = auto_direction
         caption += (
             "\n\n"
             f"👤 <b>Ученик:</b> {student_name}\n"
@@ -786,6 +815,7 @@ async def choose_payment_direction(callback: CallbackQuery):
         _rejected_by,
         _created_at,
         _updated_at,
+        _preferred_direction_id,
     ) = payment
 
     discount_percent = get_active_invitee_discount_percent(student_id_owner)
@@ -853,6 +883,7 @@ async def _apply_topup(
         _rejected_by,
         _created_at,
         _updated_at,
+        _preferred_direction_id,
     ) = payment
 
     lesson = get_student_lesson_by_id(direction_id)
