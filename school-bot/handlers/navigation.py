@@ -102,11 +102,14 @@ async def start_handler(message: Message, state: FSMContext):
             )
             if captured:
                 await message.answer(
-                    "🎉 Вы пришли по приглашению друга!\n\n"
-                    "После того как вы оплатите своё первое занятие "
-                    "(вне бесплатной диагностики), вы получите "
-                    "<b>20% скидку</b> на этот платёж, "
-                    "а пригласивший — бонусное занятие.",
+                    "🎉 <b>Вас пригласил друг!</b>\n\n"
+                    "Добро пожаловать в школу <b>Интеграл</b> 🎓\n\n"
+                    "Специально для вас — <b>скидка 20%</b> на первое занятие после бесплатной диагностики.\n\n"
+                    "Как это работает:\n"
+                    "1️⃣ Запишитесь на бесплатную диагностику\n"
+                    "2️⃣ Познакомьтесь с преподавателем\n"
+                    "3️⃣ Оплатите занятие — скидка применится автоматически\n\n"
+                    "Начнём? 👇",
                     parse_mode="HTML",
                 )
 
@@ -448,14 +451,19 @@ async def show_referral_code(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     referral_link = f"https://t.me/integral_school_ru_bot?start=ref_{telegram_id}"
     text = (
-        "🎁 <b>ВАШ РЕФЕРАЛЬНЫЙ КОД</b>\n\n"
-        f"<a href=\"{referral_link}\">{referral_link}</a>\n\n"
-        "Друг переходит → диагностика → первая оплата со <b>скидкой 20%</b> → вам <b>+1 занятие</b>."
+        "🎁 <b>Ваша реферальная ссылка</b>\n\n"
+        f"<code>{referral_link}</code>\n\n"
+        "Поделитесь ссылкой с другом — и оба получите бонус:\n\n"
+        "👤 <b>Друг</b> — скидка <b>20%</b> на первую оплату\n"
+        "🎓 <b>Вы</b> — <b>+1 занятие</b> в подарок\n\n"
+        "Схема простая:\n"
+        "Друг переходит → бесплатная диагностика → оплачивает занятие со скидкой → вы получаете бонус"
     )
     try:
         await callback.message.edit_text(
             text, parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📤 Поделиться ссылкой", url=f"https://t.me/share/url?url={referral_link}&text=Привет%21+Я+занимаюсь+в+школе+Интеграл+и+советую+попробовать+%F0%9F%8E%93+Переходи+по+моей+ссылке+%E2%80%94+получишь+скидку+20%25+на+первое+занятие%21")],
                 [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
             ]),
         )
