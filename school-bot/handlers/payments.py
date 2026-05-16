@@ -215,15 +215,6 @@ async def menu_paid(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ У вас нет направлений для оплаты.", show_alert=True)
         return
 
-    debt_directions = [d for d in directions if d[3] < 0]
-
-    # If there's debt — go directly to payment details, skip intermediate screens
-    if debt_directions:
-        debt_lessons = sum(abs(d[3]) for d in debt_directions)
-        await state.update_data(selected_direction_id=None, skip_promo=False)
-        await _show_payment_details(callback, state, "debt", "💸 Погашение долга", debt_lessons=debt_lessons)
-        return
-
     # If multiple directions — let student pick which subject to pay for
     if len(directions) > 1:
         await state.update_data(selected_direction_id=None, skip_promo=False)
