@@ -138,6 +138,8 @@ from shared.database import (
     list_promo_codes,
     get_promo_code_by_id,
     deactivate_promo_code,
+    activate_promo_code,
+    delete_promo_code,
 )
 from shared.sheets import get_sheets_client
 from shared.database import (
@@ -222,8 +224,8 @@ def build_payment_prompt_keyboard_clean() -> InlineKeyboardMarkup | None:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Перейти к оплате",
-                    url=f"https://t.me/{SCHOOL_BOT_USERNAME}?start=pay",
+                    text="💸 Погасить долг",
+                    url=f"https://t.me/{SCHOOL_BOT_USERNAME}?start=pay_debt",
                 )
             ]
         ]
@@ -2790,7 +2792,7 @@ async def add_balance_to_direction(callback: CallbackQuery):
         await callback.answer("Направление не найдено", show_alert=True)
         return
 
-    _, _, _, subject_name, lesson_balance_before, tariff_type, student_name, teacher_name = lesson
+    _, student_id, _, subject_name, lesson_balance_before, tariff_type, student_name, teacher_name = lesson
 
     add_lessons_to_balance(
         direction_id,
@@ -2823,6 +2825,31 @@ async def add_balance_to_direction(callback: CallbackQuery):
         f"Баланс стал: {lesson_balance_after}",
         reply_markup=get_admin_reply_menu(callback.from_user.id) if is_admin_role(callback.from_user.id) else get_teacher_menu()
     )
+
+    # Send debt notification to student if balance went negative
+    if lesson_balance_after < 0:
+        student = get_student_by_id(student_id)
+        student_telegram_id = student[2] if student else None
+        student_max_id = get_student_max_id(student_id)
+        debt_lines = [
+            "Здравствуйте!",
+            "",
+            f"Ученик: {student_name}",
+            f"Предмет: {subject_name}",
+            f"Преподаватель: {teacher_name}",
+            f"Баланс был: {lesson_balance_before}",
+            f"Баланс стал: {lesson_balance_after}",
+            "",
+            "❗❗❗🔴 ВНИМАНИЕ! У ВАС ЗАДОЛЖЕННОСТЬ! 🔴❗❗❗",
+            f"Размер задолженности: {abs(lesson_balance_after)} занят.",
+            "❗❗❗ Пожалуйста, внесите оплату. ❗❗❗",
+        ]
+        debt_text = "\n".join(debt_lines)
+        pay_kb = build_payment_prompt_keyboard_clean()
+        if student_telegram_id:
+            await send_student_notification(callback, student_telegram_id, debt_text, reply_markup=pay_kb)
+        if student_max_id:
+            await _send_max_notification(student_max_id, debt_text)
 
     await callback.answer()
 
@@ -4828,32 +4855,182 @@ async def student_directions(callback: CallbackQuery):
 
 # ── Promo codes ───────────────────────────────────────────────────────────────
 
-def _fmt_promo_list(promos: list[dict]) -> str:
-    if not promos:
-        return "Промокодов пока нет."
-    lines = []
-    for p in promos:
-        dtype = "%" if p["discount_type"] == "percent" else "₽"
-        val = int(p["discount_value"]) if p["discount_value"] == int(p["discount_value"]) else p["discount_value"]
-        status = "✅" if p["active"] else "❌"
-        until = f" до {p['valid_until']}" if p["valid_until"] else " (бессрочно)"
-        uses = f" | использован {p['used_count']}/{p['max_uses']}" if p["max_uses"] else f" | использован {p['used_count']} раз"
-        assigned = f" | назначен {p['assigned_count']} уч." if p["assigned_count"] else ""
-        lines.append(f"{status} <code>{p['code']}</code> — {val}{dtype}{until}{uses}{assigned}")
-    return "\n".join(lines)
+def _promo_discount_str(p: dict) -> str:
+    dv = p["discount_value"]
+    val = int(dv) if float(dv) == int(float(dv)) else dv
+    dtype = "%" if p["discount_type"] == "percent" else "₽"
+    return f"{val}{dtype}"
+
+
+def _promo_detail_text(p: dict) -> str:
+    disc = _promo_discount_str(p)
+    status = "✅ Активен" if p["active"] else "📦 В архиве"
+    until = p["valid_until"][:10] if p.get("valid_until") else "бессрочно"
+    atp = p.get("applies_to_packages", 0)
+    scope = "Только разовые" if atp == 0 else ("Только пакеты" if atp == 1 else "Разовые + пакеты")
+    uses_str = f"{p['used_count']}" + (f" из {p['max_uses']}" if p["max_uses"] else "")
+    return (
+        f"🎟 <b>{p['code']}</b>\n\n"
+        f"Скидка: <b>{disc}</b>\n"
+        f"Применяется: {scope}\n"
+        f"Срок: <b>{until}</b>\n"
+        f"Использован: <b>{uses_str}</b> раз\n"
+        f"Статус: {status}"
+    )
+
+
+def _promo_detail_kb(p: dict, from_archive: bool = False) -> InlineKeyboardMarkup:
+    pid = p["id"]
+    back_cb = "admin_promo_archive" if from_archive else "admin_promo_list"
+    back_label = "← К архиву" if from_archive else "← К списку"
+    toggle_btn = (
+        InlineKeyboardButton(text="✅ Активировать", callback_data=f"promo_activate_{pid}")
+        if not p["active"] else
+        InlineKeyboardButton(text="📦 В архив", callback_data=f"promo_archive_{pid}")
+    )
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [toggle_btn],
+        [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"promo_delete_confirm_{pid}")],
+        [InlineKeyboardButton(text=back_label, callback_data=back_cb)],
+    ])
+
+
+def _active_promo_btn(p: dict) -> str:
+    disc = _promo_discount_str(p)
+    uses = f"{p['used_count']}" + (f"/{p['max_uses']}" if p["max_uses"] else "")
+    atp2 = p.get("applies_to_packages", 0)
+    pkg = " 📦" if atp2 == 1 else (" ✅" if atp2 == 2 else "")
+    return f"✅  {p['code']} — {disc}{pkg}   ({uses} исп.)"
+
+
+def _archive_promo_btn(p: dict) -> str:
+    disc = _promo_discount_str(p)
+    uses = f"{p['used_count']}" + (f"/{p['max_uses']}" if p["max_uses"] else "")
+    return f"📦  {p['code']} — {disc}   ({uses} исп.)"
+
+
+def _build_active_list_kb(promos: list[dict]) -> InlineKeyboardMarkup:
+    active = [p for p in promos if p["active"]]
+    archive_count = sum(1 for p in promos if not p["active"])
+    rows = []
+    for p in active:
+        rows.append([InlineKeyboardButton(text=_active_promo_btn(p), callback_data=f"promo_detail_{p['id']}" )])
+    rows.append([InlineKeyboardButton(text="➕ Создать промокод", callback_data="admin_promo_create")])
+    if archive_count:
+        rows.append([InlineKeyboardButton(text=f"📦 Архив ({archive_count})", callback_data="admin_promo_archive")])
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data="admin_section_finance")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_archive_kb(promos: list[dict]) -> InlineKeyboardMarkup:
+    archived = [p for p in promos if not p["active"]]
+    rows = []
+    for p in archived:
+        rows.append([InlineKeyboardButton(text=_archive_promo_btn(p), callback_data=f"promo_detail_arch_{p['id']}" )])
+    rows.append([InlineKeyboardButton(text="← К активным", callback_data="admin_promo_list")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @router.callback_query(lambda c: c.data == "admin_promo_list")
 async def admin_promo_list(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     promos = list_promo_codes()
-    text = f"🎟 <b>Промокоды</b>\n\n{_fmt_promo_list(promos)}"
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Создать промокод", callback_data="admin_promo_create")],
-        [InlineKeyboardButton(text="← Назад", callback_data="admin_section_finance")],
-    ])
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    active = [p for p in promos if p["active"]]
+    text = "🎟 <b>Промокоды</b>\n\n" + ("Выберите промокод для управления." if active else "Активных промокодов нет.")
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_build_active_list_kb(promos))
     await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "admin_promo_archive")
+async def admin_promo_archive_list(callback: CallbackQuery):
+    promos = list_promo_codes()
+    archived = [p for p in promos if not p["active"]]
+    text = f"📦 <b>Архив промокодов</b>\n\n" + (f"Промокодов: {len(archived)}" if archived else "Архив пуст.")
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_build_archive_kb(promos))
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("promo_detail_arch_"))
+async def promo_detail_from_archive(callback: CallbackQuery):
+    try:
+        pid = int(callback.data.split("promo_detail_arch_")[1])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка", show_alert=True)
+        return
+    p = get_promo_code_by_id(pid)
+    if not p:
+        await callback.answer("Промокод не найден", show_alert=True)
+        return
+    await callback.message.edit_text(_promo_detail_text(p), parse_mode="HTML", reply_markup=_promo_detail_kb(p, from_archive=True))
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("promo_detail_") and not c.data.startswith("promo_detail_arch_"))
+async def promo_detail(callback: CallbackQuery):
+    try:
+        pid = int(callback.data.split("promo_detail_")[1])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка", show_alert=True)
+        return
+    p = get_promo_code_by_id(pid)
+    if not p:
+        await callback.answer("Промокод не найден", show_alert=True)
+        return
+    await callback.message.edit_text(_promo_detail_text(p), parse_mode="HTML", reply_markup=_promo_detail_kb(p))
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("promo_archive_"))
+async def promo_archive(callback: CallbackQuery):
+    pid = int(callback.data.split("promo_archive_")[1])
+    deactivate_promo_code(pid)
+    p = get_promo_code_by_id(pid)
+    if not p:
+        await callback.answer("Не найден", show_alert=True)
+        return
+    await callback.answer("Перемещён в архив")
+    await callback.message.edit_text(_promo_detail_text(p), parse_mode="HTML", reply_markup=_promo_detail_kb(p, from_archive=True))
+
+
+@router.callback_query(lambda c: c.data.startswith("promo_activate_"))
+async def promo_activate(callback: CallbackQuery):
+    pid = int(callback.data.split("promo_activate_")[1])
+    activate_promo_code(pid)
+    p = get_promo_code_by_id(pid)
+    if not p:
+        await callback.answer("Не найден", show_alert=True)
+        return
+    await callback.answer("Активирован ✅")
+    await callback.message.edit_text(_promo_detail_text(p), parse_mode="HTML", reply_markup=_promo_detail_kb(p))
+
+
+@router.callback_query(lambda c: c.data.startswith("promo_delete_confirm_"))
+async def promo_delete_confirm(callback: CallbackQuery):
+    pid = int(callback.data.split("promo_delete_confirm_")[1])
+    p = get_promo_code_by_id(pid)
+    if not p:
+        await callback.answer("Не найден", show_alert=True)
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🗑 Да, удалить", callback_data=f"promo_delete_yes_{pid}"),
+        InlineKeyboardButton(text="Отмена", callback_data=f"promo_detail_{pid}"),
+    ]])
+    await callback.message.edit_text(
+        f"⚠️ Удалить промокод <b>{p['code']}</b>?\n\nЭто действие необратимо.",
+        parse_mode="HTML", reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("promo_delete_yes_"))
+async def promo_delete_yes(callback: CallbackQuery):
+    pid = int(callback.data.split("promo_delete_yes_")[1])
+    delete_promo_code(pid)
+    await callback.answer("Удалён 🗑", show_alert=False)
+    promos = list_promo_codes()
+    active = [p for p in promos if p["active"]]
+    text = "🎟 <b>Промокоды</b>\n\n" + ("Выберите промокод для управления." if active else "Активных промокодов нет.")
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=_build_active_list_kb(promos))
 
 
 @router.callback_query(lambda c: c.data == "admin_promo_create")
@@ -4978,7 +5155,7 @@ async def admin_promo_valid_until(message: Message, state: FSMContext):
 @router.callback_query(lambda c: c.data == "promo_uses_none")
 async def admin_promo_uses_none(callback: CallbackQuery, state: FSMContext):
     await state.update_data(promo_max_uses=None)
-    await _ask_promo_assign_student(callback.message, state, edit=True)
+    await _ask_promo_applies_to(callback.message, state, edit=True)
     await callback.answer()
 
 
@@ -4996,7 +5173,31 @@ async def admin_promo_max_uses(message: Message, state: FSMContext):
         except ValueError:
             await message.answer("Введите целое положительное число или «нет».")
             return
-    await _ask_promo_assign_student(message, state, edit=False)
+    await _ask_promo_applies_to(message, state, edit=False)
+
+
+async def _ask_promo_applies_to(msg, state: FSMContext, edit: bool = False):
+    text = "На что распространяется промокод?"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔢 Только разовые", callback_data="promo_applies_single")],
+        [InlineKeyboardButton(text="📦 Только пакеты", callback_data="promo_applies_packages")],
+        [InlineKeyboardButton(text="✅ Разовые + пакеты", callback_data="promo_applies_all")],
+    ])
+    if edit:
+        await msg.edit_text(text, reply_markup=kb)
+    else:
+        await msg.answer(text, reply_markup=kb)
+    await state.set_state(AdminStates.waiting_promo_applies_to)
+
+
+@router.callback_query(lambda c: c.data in ("promo_applies_single", "promo_applies_packages", "promo_applies_all"))
+async def admin_promo_applies_to(callback: CallbackQuery, state: FSMContext):
+    # applies_to_packages: 0=single only, 1=packages only, 2=all
+    mapping = {"promo_applies_single": 0, "promo_applies_packages": 1, "promo_applies_all": 2}
+    applies_to_packages = mapping.get(callback.data, 0)
+    await state.update_data(promo_applies_to_packages=applies_to_packages)
+    await _ask_promo_assign_student(callback.message, state, edit=True)
+    await callback.answer()
 
 
 async def _ask_promo_assign_student(msg, state: FSMContext, edit: bool = False):
@@ -5052,9 +5253,10 @@ async def _finalize_promo(msg, state: FSMContext, student_id: int | None, edit: 
     value = float(data.get("promo_value", 0))
     until = data.get("promo_until")
     max_uses = data.get("promo_max_uses")
+    applies_to_packages = data.get("promo_applies_to_packages", 0)
     await state.clear()
 
-    promo_id = await asyncio.to_thread(create_promo_code, code, dtype, value, until, max_uses)
+    promo_id = await asyncio.to_thread(create_promo_code, code, dtype, value, until, max_uses, applies_to_packages)
     if promo_id is None:
         text = f"❌ Промокод <code>{code}</code> уже существует."
         if edit:
