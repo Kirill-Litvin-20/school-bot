@@ -2815,6 +2815,11 @@ async def add_balance_to_direction(callback: CallbackQuery):
     operation_text = "Начислено" if lessons_to_add > 0 else "Убавлено"
     operation_amount = abs(lessons_to_add)
 
+    notify_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔔 Оповестить ученика", callback_data=f"bal_notify_{direction_id}")],
+        [InlineKeyboardButton(text="🔕 Не уведомлять", callback_data="bal_notify_skip")],
+    ])
+
     await callback.message.answer(
         f"✅ Баланс обновлен\n\n"
         f"Ученик: {student_name}\n"
@@ -2823,35 +2828,66 @@ async def add_balance_to_direction(callback: CallbackQuery):
         f"Баланс был: {lesson_balance_before}\n"
         f"{operation_text}: {operation_amount}\n"
         f"Баланс стал: {lesson_balance_after}",
-        reply_markup=get_admin_reply_menu(callback.from_user.id) if is_admin_role(callback.from_user.id) else get_teacher_menu()
+        reply_markup=notify_kb,
     )
 
-    # Send debt notification to student if balance went negative
-    if lesson_balance_after < 0:
-        student = get_student_by_id(student_id)
-        student_telegram_id = student[2] if student else None
-        student_max_id = get_student_max_id(student_id)
-        debt_lines = [
-            "Здравствуйте!",
-            "",
-            f"Ученик: {student_name}",
-            f"Предмет: {subject_name}",
-            f"Преподаватель: {teacher_name}",
-            f"Баланс был: {lesson_balance_before}",
-            f"Баланс стал: {lesson_balance_after}",
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "bal_notify_skip")
+async def bal_notify_skip(callback: CallbackQuery):
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer("Уведомление не отправлено")
+
+
+@router.callback_query(lambda c: c.data.startswith("bal_notify_"))
+async def bal_notify_send(callback: CallbackQuery):
+    if not is_admin_role(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    direction_id = int(callback.data.split("bal_notify_")[1])
+    lesson = get_student_lesson_by_id(direction_id)
+    if not lesson:
+        await callback.answer("Направление не найдено", show_alert=True)
+        return
+
+    _, student_id, _, subject_name, lesson_balance, _, student_name, teacher_name = lesson
+    student = get_student_by_id(student_id)
+    student_telegram_id = student[2] if student else None
+    student_max_id = get_student_max_id(student_id)
+
+    lines = [
+        "Здравствуйте!",
+        "",
+        f"Ученик: {student_name}",
+        f"Предмет: {subject_name}",
+        f"Преподаватель: {teacher_name}",
+        f"Баланс стал: {lesson_balance}",
+    ]
+
+    reply_markup = None
+    if lesson_balance < 0:
+        lines.extend([
             "",
             "❗❗❗🔴 ВНИМАНИЕ! У ВАС ЗАДОЛЖЕННОСТЬ! 🔴❗❗❗",
-            f"Размер задолженности: {abs(lesson_balance_after)} занят.",
+            f"Размер задолженности: {abs(lesson_balance)} занят.",
             "❗❗❗ Пожалуйста, внесите оплату. ❗❗❗",
-        ]
-        debt_text = "\n".join(debt_lines)
-        pay_kb = build_payment_prompt_keyboard_clean()
-        if student_telegram_id:
-            await send_student_notification(callback, student_telegram_id, debt_text, reply_markup=pay_kb)
-        if student_max_id:
-            await _send_max_notification(student_max_id, debt_text)
+        ])
+        reply_markup = build_payment_prompt_keyboard_clean()
 
-    await callback.answer()
+    text = "\n".join(lines)
+
+    sent = False
+    if student_telegram_id:
+        await send_student_notification(callback, student_telegram_id, text, reply_markup=reply_markup)
+        sent = True
+    if student_max_id:
+        await _send_max_notification(student_max_id, text)
+        sent = True
+
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer("✅ Уведомление отправлено" if sent else "⚠️ Не удалось найти контакт ученика", show_alert=not sent)
 
 
 @router.callback_query(lambda c: c.data == "admin_balance_history")
