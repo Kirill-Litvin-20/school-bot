@@ -391,11 +391,18 @@ async def pay_skip_promo(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(lambda c: c.data == "debt_notify_pay")
 async def debt_notify_pay(callback: CallbackQuery, state: FSMContext):
-    """Called from debt notification button — same flow as cabinet pay button."""
+    """Called from debt notification button — go directly to payment details."""
     if not _is_private_chat(callback.message):
         await callback.answer("⚠️ Оплату отправляйте в личном чате с ботом.", show_alert=True)
         return
-    await _handle_pay_entry(callback, state)
+    students = find_students_by_telegram_id(callback.from_user.id)
+    if not students:
+        await callback.answer("❌ Вы не зарегистрированы в системе.", show_alert=True)
+        return
+    directions = get_student_directions(students[0][0])
+    debt_lessons = sum(abs(d[3]) for d in directions if d[3] < 0)
+    await state.update_data(selected_direction_id=None, skip_promo=False)
+    await _show_payment_details(callback, state, "debt", "💸 Погашение долга", debt_lessons=debt_lessons)
 
 
 @router.callback_query(ApplicationForm.payment_type_choice, lambda c: c.data == "pay_debt")
