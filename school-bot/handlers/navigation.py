@@ -199,7 +199,7 @@ async def start_handler(message: Message, state: FSMContext):
         await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
         return
     await message.answer(
-        "Здравствуйте! Пожалуйста, укажите, кто будет оставлять заявку.",
+        "Добро пожаловать в школу Интеграл! 👋",
         reply_markup=get_main_menu_keyboard(),
     )
     await state.set_state(ApplicationForm.menu)
