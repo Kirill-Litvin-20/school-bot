@@ -253,6 +253,16 @@ def _fmt_short_date(date_str: str) -> str:
         return date_str or "—"
 
 
+def _fmt_short_datetime(datetime_str: str) -> str:
+    try:
+        date_part, time_part = datetime_str.split(" ", 1)
+        y, m, d = date_part.split("-")
+        hh, mm = time_part.split(":")[:2]
+        return f"{int(d)} {_MONTHS_SHORT[int(m) - 1]} {hh}:{mm}"
+    except Exception:
+        return _fmt_short_date(datetime_str[:10]) if datetime_str else "—"
+
+
 def _fmt_payment_status_short(status: str) -> str:
     return {
         "pending":    "⏳ ожидает",
@@ -328,7 +338,7 @@ def build_cabinet_text(
         for payment in recent_payments[:4]:
             _, status, _, created_at, _, lessons_added = payment[:6]
             source_platform = payment[6] if len(payment) > 6 else "telegram"
-            date_view = _fmt_short_date(str(created_at)[:10] if created_at else "")
+            date_view = _fmt_short_datetime(str(created_at) if created_at else "")
             status_label = _fmt_payment_status_short(status)
             lessons_str = f" <b>+{lessons_added} зан.</b>" if lessons_added else ""
             platform_str = " 📱" if source_platform == "max" else ""

@@ -141,6 +141,16 @@ def _fmt_short_date(date_str: str) -> str:
         return date_str or "—"
 
 
+def _fmt_short_datetime(datetime_str: str) -> str:
+    try:
+        date_part, time_part = datetime_str.split(" ", 1)
+        y, m, d = date_part.split("-")
+        hh, mm = time_part.split(":")[:2]
+        return f"{int(d)} {_MONTHS_SHORT[int(m) - 1]} {hh}:{mm}"
+    except Exception:
+        return _fmt_short_date(datetime_str[:10]) if datetime_str else "—"
+
+
 def _format_attendance_status(status: str) -> str:
     return {
         "present": "✅ был",
@@ -203,7 +213,7 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
         for p in payments[:4]:
             _, status, _, created_at, _, lessons = p[:6]
             source_platform = p[6] if len(p) > 6 else "max"
-            date_view = _fmt_short_date(str(created_at)[:10] if created_at else "")
+            date_view = _fmt_short_datetime(str(created_at) if created_at else "")
             lessons_str = f" +{lessons} зан." if lessons else ""
             platform_str = " 📱" if source_platform == "max" else " TG"
             lines.append(f"  • {date_view}{platform_str} — {_format_payment_status(status)}{lessons_str}")
