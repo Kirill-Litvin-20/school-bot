@@ -106,7 +106,7 @@ async def start_handler(message: Message, state: FSMContext):
             if captured:
                 await message.answer(
                     "🎉 <b>Вас пригласил друг!</b>\n\n"
-                    "Добро пожаловать в школу <b>Интеграл</b> 🎓\n\n"
+                    "Добро пожаловать в онлайн школу <b>Интеграл</b> 🎓\n\n"
                     "Специально для вас — <b>скидка 20%</b> на первое занятие после бесплатной диагностики.\n\n"
                     "Как это работает:\n"
                     "1️⃣ Запишитесь на бесплатную диагностику\n"
@@ -172,7 +172,7 @@ async def start_handler(message: Message, state: FSMContext):
         await show_debt_payment_from_message(message, state)
         return
     await message.answer(
-        "Добро пожаловать в школу Интеграл! 👋",
+        "Добро пожаловать в онлайн школу Интеграл! 👋",
         reply_markup=get_main_menu_keyboard(),
     )
     await state.set_state(ApplicationForm.menu)

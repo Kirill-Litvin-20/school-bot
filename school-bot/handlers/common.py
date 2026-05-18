@@ -341,8 +341,7 @@ def build_cabinet_text(
             date_view = _fmt_short_datetime(str(created_at) if created_at else "")
             status_label = _fmt_payment_status_short(status)
             lessons_str = f" <b>+{lessons_added} зан.</b>" if lessons_added else ""
-            platform_str = " 📱" if source_platform == "max" else ""
-            lines.append(f"  • {date_view}{platform_str} — {status_label}{lessons_str}")
+            lines.append(f"  • {date_view} — {status_label}{lessons_str}")
 
     return "\n".join(lines)
 
