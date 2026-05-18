@@ -373,6 +373,7 @@ def get_student_disambiguation_keyboard(
             [InlineKeyboardButton(text=text[:64], callback_data=f"{action_prefix}_{student_id}")]
         )
     buttons.append([InlineKeyboardButton(text="Главное меню", callback_data="menu_home")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_lessons_report_period_keyboard(back_callback: str = "superadmin_section_reports"):
