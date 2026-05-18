@@ -518,13 +518,7 @@ async def handle_file(
             main_menu_kb(),
         )
         return
-    fname = (filename or "").lower()
-    mime = (mime_type or "").lower()
-    is_pdf = fname.endswith(".pdf") or "pdf" in mime
-    if not is_pdf:
-        logger.warning("Non-PDF file received: filename=%r mime=%r", filename, mime_type)
-        await api.send_message(user_id, "❓ Пожалуйста, отправьте PDF-файл чека.")
-        return
+    logger.info("File received: filename=%r mime=%r url=%r", filename, mime_type, file_url[:80] if file_url else "")
     await _process_payment_file(api, user_id, username, name, file_url, "pdf", caption)
 
 
