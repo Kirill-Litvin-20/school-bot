@@ -71,6 +71,7 @@ from shared.database import (
     get_recent_attendance_for_student,
     get_recent_payment_history_by_student_id,
     get_student_directions,
+    get_student_lesson_by_id,
     get_teacher_catalog_name_subject_pairs,
     link_max_to_student,
     set_max_fsm_state,
@@ -689,14 +690,27 @@ async def _process_payment_file(
             _, code, dtype, dvalue, _ = promo_applied
             unit = "%" if dtype == "percent" else "₽"
             promo_line = f"\n🎟 Промокод: {code} (-{int(dvalue)}{unit})"
-        username_line = f"🔗 Username: @{username}" if username else "🔗 Username: не указан"
+
+        username_line = f"@{username}" if username else "не указан"
+
+        direction_line = ""
+        selected_dir_id = fsm_data.get("selected_direction_id")
+        if selected_dir_id:
+            dir_row = get_student_lesson_by_id(selected_dir_id)
+            if dir_row:
+                subject_name = dir_row[3]
+                teacher_name = dir_row[7]
+                direction_line = f"\n📚 Направление: {subject_name} — {teacher_name}"
+
         payment_caption = (
             f"💳 Оплата #{payment_request_id}\n\n"
             f"📌 Статус: ⏳ Ожидает проверки\n"
             f"📱 Платформа: MAX\n"
-            f"👤 Имя: {name}\n"
-            + username_line
+            f"👤 Имя (MAX): {name}\n"
+            f"🔗 Username: {username_line}\n"
+            f"🆔 MAX ID: {user_id}"
             + (f"\n💰 Тип оплаты: {payment_type_label}" if payment_type_label else "")
+            + direction_line
             + promo_line
         )
 
