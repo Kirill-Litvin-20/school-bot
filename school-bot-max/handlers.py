@@ -13,6 +13,7 @@ import sys
 import time
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import quote
 from uuid import uuid4
 
 from aiogram import Bot as TelegramBot
@@ -1535,17 +1536,30 @@ async def _dispatch_callback(
                 "Для получения реферальной ссылки сначала привяжите Telegram-аккаунт:\n"
                 "👤 Личный кабинет → 🔗 Связать с Telegram.\n\n"
                 "После привязки ссылка будет доступна здесь.",
-                back_menu_kb(),
+                keyboard(
+                    [btn("🔗 Связать с Telegram", "link_tg")],
+                    [btn("← В меню", "back_to_menu")],
+                ),
             )
             return
         tg_bot_username = TG_BOT_USERNAME or "integral_school_ru_bot"
         referral_link = f"https://t.me/{tg_bot_username}?start=ref_{telegram_id}"
+        share_text = "Привет! Я занимаюсь в школе Интеграл и советую попробовать 🎓 Переходи по моей ссылке — получишь скидку 20% на первое занятие!"
+        share_url = f"https://t.me/share/url?url={quote(referral_link, safe='')}&text={quote(share_text, safe='')}"
+        from shared.max_api import btn_url
         await _reply(
             api, user_id, message_id,
-            f"🎁 ВАШ РЕФЕРАЛЬНЫЙ КОД\n\n"
+            f"🎁 Ваша реферальная ссылка\n\n"
             f"{referral_link}\n\n"
-            "Друг переходит → диагностика → первая оплата со скидкой 20% → вам +1 занятие.",
-            back_menu_kb(),
+            "Поделитесь ссылкой с другом — и оба получите бонус:\n\n"
+            "👤 Друг — скидка 20% на первую оплату\n"
+            "🎓 Вы — +1 занятие в подарок\n\n"
+            "Схема простая:\n"
+            "Друг переходит → бесплатная диагностика → оплачивает занятие со скидкой → вы получаете бонус",
+            keyboard(
+                [btn_url("📤 Поделиться ссылкой", share_url)],
+                [btn("← В меню", "back_to_menu")],
+            ),
         )
         return
 
