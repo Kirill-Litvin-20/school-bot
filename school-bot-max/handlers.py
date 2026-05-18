@@ -507,6 +507,7 @@ async def handle_file(
     file_url: str,
     filename: str,
     caption: str | None,
+    mime_type: str = "",
 ) -> None:
     state, data = get_max_fsm_state(user_id)
     if state != PAYMENT_PROOF:
@@ -517,7 +518,10 @@ async def handle_file(
         )
         return
     fname = (filename or "").lower()
-    if not fname.endswith(".pdf"):
+    mime = (mime_type or "").lower()
+    is_pdf = fname.endswith(".pdf") or "pdf" in mime
+    if not is_pdf:
+        logger.warning("Non-PDF file received: filename=%r mime=%r", filename, mime_type)
         await api.send_message(user_id, "❓ Пожалуйста, отправьте PDF-файл чека.")
         return
     await _process_payment_file(api, user_id, username, name, file_url, "pdf", caption)
@@ -1261,29 +1265,58 @@ async def _dispatch_callback(
         await _reply(api, user_id, message_id, "🎁 СПЕЦИАЛЬНЫЕ ПРЕДЛОЖЕНИЯ\n\nВыберите предложение:", offers_kb())
         return
 
-    if payload in ("offer_free_diagnosis", "offer_first_package", "offer_referral_program"):
-        texts = {
-            "offer_free_diagnosis": (
-                "🎁 БЕСПЛАТНАЯ ДИАГНОСТИКА\n\n"
-                "Первое занятие для новых учеников — бесплатно!\n"
-                "Мы определим ваш уровень и подберём план обучения.\n\n"
-                "Оставьте заявку через 📝 Оставить заявку."
+    if payload == "offer_free_diagnosis":
+        await _reply(
+            api, user_id, message_id,
+            "🎁 БЕСПЛАТНАЯ ДИАГНОСТИКА\n\n"
+            "Первое занятие для новых учеников — бесплатно!\n\n"
+            "✅ Определим уровень знаний\n"
+            "✅ Подберём оптимальный план обучения\n"
+            "✅ Ответим на все вопросы\n\n"
+            "Оставьте заявку — мы свяжемся с вами.",
+            keyboard(
+                [btn("📝 Оставить заявку", "menu_signup")],
+                [btn("← Назад", "menu_offers")],
             ),
-            "offer_first_package": (
-                "💰 СКИДКА НА ПЕРВЫЙ ПАКЕТ\n\n"
-                "Скидка на первый пакет занятий для новых учеников.\n"
-                "Размер скидки уточняется при оформлении.\n\n"
-                "Оставьте заявку через 📝 Оставить заявку."
+        )
+        return
+
+    if payload == "offer_first_package":
+        await _reply(
+            api, user_id, message_id,
+            "💰 СКИДКА НА ПЕРВЫЙ ПАКЕТ\n\n"
+            "Выгодная скидка при оформлении первого пакета занятий для новых учеников.\n\n"
+            "✅ Только первый пакет\n"
+            "✅ Размер скидки уточняется при оформлении\n\n"
+            "Оставьте заявку — мы свяжемся с вами.",
+            keyboard(
+                [btn("📝 Оставить заявку", "menu_signup")],
+                [btn("← Назад", "menu_offers")],
             ),
-            "offer_referral_program": (
-                "🤝 РЕФЕРАЛЬНАЯ ПРОГРАММА\n\n"
-                "Пригласите друга — получите бонусное занятие!\n\n"
-                "Друг получает скидку 20% на первое занятие.\n"
-                "Вы получаете +1 занятие после его первой оплаты.\n\n"
-                "Реферальная ссылка доступна в Telegram-боте школы."
+        )
+        return
+
+    if payload == "offer_referral_program":
+        await _reply(
+            api, user_id, message_id,
+            "🤝 РЕФЕРАЛЬНАЯ ПРОГРАММА\n\n"
+            "Приглашайте друзей в школу и получайте бонусные занятия!\n\n"
+            "Что получает приглашённый:\n"
+            "✅ Бесплатную диагностику (1 занятие на балансе сразу при заведении).\n"
+            "✅ Скидку 20% на первое платное занятие после диагностики.\n\n"
+            "Что получаете вы:\n"
+            "✅ +1 бесплатное занятие после того, как приглашённый оплатит "
+            "своё первое занятие. Бонус автоматически списывается на ближайшем "
+            "проведённом занятии.\n\n"
+            "Где взять свою ссылку?\n"
+            "Откройте 👤 Личный кабинет → 🎁 Реферальный код. "
+            "Скопируйте ссылку и отправьте другу.\n\n"
+            "Уведомление о начисленном бонусе придёт автоматически в этот чат.",
+            keyboard(
+                [btn("🎁 Реферальный код", "show_referral_code")],
+                [btn("← Назад", "menu_offers")],
             ),
-        }
-        await _reply(api, user_id, message_id, texts[payload], back_menu_kb())
+        )
         return
 
     if payload == "menu_faq":
