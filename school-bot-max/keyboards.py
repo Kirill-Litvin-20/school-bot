@@ -204,6 +204,20 @@ def package_selection_kb(packages: dict, promo=None) -> list[dict]:
     return keyboard(*rows)
 
 
+def review_card_kb(index: int, total: int) -> list[dict]:
+    nav_row = []
+    if index > 0:
+        nav_row.append(btn("◀ Пред.", "review_prev"))
+    nav_row.append(btn(f"{index + 1} / {total}", "noop"))
+    if index < total - 1:
+        nav_row.append(btn("След. ▶", "review_next"))
+    rows = []
+    if len(nav_row) > 1:
+        rows.append(nav_row)
+    rows.append([btn("← В меню", "back_to_menu")])
+    return keyboard(*rows)
+
+
 def teacher_subjects_kb(subjects: list[str]) -> list[dict]:
     rows = [[btn(s, f"teacher_subject_{s}")] for s in subjects]
     rows.append([btn("← В меню", "back_to_menu")])
