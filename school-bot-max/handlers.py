@@ -212,11 +212,9 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
         lines.extend(["", "💳 Последние оплаты"])
         for p in payments[:4]:
             _, status, _, created_at, _, lessons = p[:6]
-            source_platform = p[6] if len(p) > 6 else "max"
             date_view = _fmt_short_datetime(str(created_at) if created_at else "")
             lessons_str = f" +{lessons} зан." if lessons else ""
-            platform_str = " 📱" if source_platform == "max" else " TG"
-            lines.append(f"  • {date_view}{platform_str} — {_format_payment_status(status)}{lessons_str}")
+            lines.append(f"  • {date_view} — {_format_payment_status(status)}{lessons_str}")
 
     return "\n".join(lines)
 
