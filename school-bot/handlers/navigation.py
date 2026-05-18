@@ -30,6 +30,7 @@ from shared.database import (
     get_active_promo_for_user,
     get_latest_student_by_username,
     get_onboarding_invite_by_token,
+    get_recent_payment_history_by_student_id,
     get_recent_payment_history_by_telegram_user,
     get_student_directions,
     mark_onboarding_invite_used,
@@ -272,10 +273,7 @@ async def menu_cabinet(callback: CallbackQuery, state: FSMContext):
     student_id, student_name, _, _ = students[0]
     try:
         directions = get_student_directions(student_id)
-        recent_payments = get_recent_payment_history_by_telegram_user(
-            callback.from_user.id,
-            limit=4,
-        )
+        recent_payments = get_recent_payment_history_by_student_id(student_id, limit=4)
         text = build_cabinet_text(student_name, directions, recent_payments, student_id=student_id)
         text += build_multi_students_warning(len(students))
         try:
@@ -302,7 +300,7 @@ async def open_cabinet_any_state(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ApplicationForm.menu)
     try:
         directions = get_student_directions(student_id)
-        recent_payments = get_recent_payment_history_by_telegram_user(callback.from_user.id, limit=4)
+        recent_payments = get_recent_payment_history_by_student_id(student_id, limit=4)
         text = build_cabinet_text(student_name, directions, recent_payments, student_id=student_id)
         text += build_multi_students_warning(len(students))
         try:

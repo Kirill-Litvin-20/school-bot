@@ -5251,6 +5251,58 @@ def get_recent_payment_history_by_max_user(max_user_id: int, limit: int = 4) -> 
     return rows
 
 
+def get_recent_payment_history_by_student_id(student_id: int, limit: int = 4) -> list[tuple]:
+    """Get recent payments for a student from both Telegram and MAX platforms."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT telegram_id, max_id FROM students WHERE id = ?", (student_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return []
+    telegram_id, max_id = row
+
+    conn = get_connection()
+    cur = conn.cursor()
+    conditions = []
+    params: list = []
+    if telegram_id:
+        conditions.append("pr.telegram_user_id = ?")
+        params.append(telegram_id)
+    if max_id:
+        conditions.append("pr.max_user_id = ?")
+        params.append(max_id)
+    if not conditions:
+        conn.close()
+        return []
+    where_clause = " OR ".join(conditions)
+    params.append(limit)
+    cur.execute(
+        f"""
+        SELECT
+            pr.id, pr.status, pr.caption_text, pr.created_at, pr.updated_at,
+            COALESCE(
+                (
+                    SELECT SUM(bh.lessons_delta)
+                    FROM balance_history bh
+                    WHERE bh.operation_type = 'manual_topup'
+                      AND COALESCE(bh.comment, '') LIKE '%#' || CAST(pr.id AS TEXT) || '%'
+                ),
+                0
+            ) AS lessons_added,
+            COALESCE(pr.source_platform, 'telegram') AS source_platform
+        FROM payment_requests pr
+        WHERE {where_clause}
+        ORDER BY pr.id DESC
+        LIMIT ?
+        """,
+        params,
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
 def get_active_promo_for_student_id(student_id: int):
     """Return active promo for student by student.id (id, code, discount_type, discount_value, applies_to_packages) or None."""
     _MSK = timezone(timedelta(hours=3))

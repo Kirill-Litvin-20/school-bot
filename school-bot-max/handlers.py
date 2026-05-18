@@ -456,13 +456,15 @@ async def handle_text(
             msg = f"❌ Срок действия промокода {code} истёк."
         elif result == "limit_reached":
             msg = f"❌ Промокод {code} исчерпал лимит использований."
+        elif result == "already_used":
+            msg = f"❌ Вы уже использовали промокод {code}."
         elif result == "already_assigned":
             msg = f"✅ Промокод {code} уже применён к вашему аккаунту."
         else:
             msg = "⚠️ Произошла ошибка. Попробуйте позже или обратитесь к администратору."
         set_max_fsm_state(user_id, MENU)
         from shared.max_api import btn as _btn, keyboard as _keyboard
-        kb = _keyboard([_btn("💳 Оплатить занятия", "menu_paid")], [_btn("← В меню", "back_to_menu")])
+        kb = _keyboard([_btn("💳 Оплатить занятия", "menu_paid")], [_btn("← В личный кабинет", "menu_cabinet")])
         await api.send_message(user_id, msg, kb)
 
     elif state == PAYMENT_PROOF:
@@ -790,7 +792,7 @@ async def _dispatch_callback(
     if payload in ("user_student", "user_parent"):
         data["user_type"] = "Ученик" if payload == "user_student" else "Родитель"
         set_max_fsm_state(user_id, APP_NAME, data)
-        await _reply(api, user_id, message_id, "📝 Напишите, как к вам обращаться:")
+        await _reply(api, user_id, message_id, "📝 Напишите, как к вам обращаться:", back_kb())
         return
 
     if payload == "menu_cabinet":
@@ -826,7 +828,7 @@ async def _dispatch_callback(
             )
             return
         set_max_fsm_state(user_id, ENTER_PROMO, data)
-        await _reply(api, user_id, message_id, "🎟 Введите промокод:\n\nНапишите код в следующем сообщении.")
+        await _reply(api, user_id, message_id, "🎟 Введите промокод:\n\nНапишите код в следующем сообщении.", keyboard([btn("← В личный кабинет", "menu_cabinet")]))
         return
 
     if payload == "link_tg":
@@ -932,16 +934,18 @@ async def _dispatch_callback(
         promo = None if skip_promo else get_active_promo_for_max_user(user_id)
 
         price_block = ""
+        promo_not_applicable_note = ""
         if LESSON_PRICE:
             if payload == "pay_single":
                 dtype_p = dvalue_p = None
                 if promo:
-                    _, _, dtype_p, dvalue_p, atp = promo
+                    _, promo_code_str, dtype_p, dvalue_p, atp = promo
                     dvalue_p = float(dvalue_p)
                     applies_to_pkg = int(atp or 0) in (1, 2)
                     if applies_to_pkg:
                         promo = None  # package-only promo, don't apply to single
                         dtype_p = None
+                        promo_not_applicable_note = f"\n🎟 Промокод {promo_code_str} применяется только к пакетам занятий\n"
                 base = LESSON_PRICE
                 if dtype_p == "fixed_rub":
                     after = max(0, base - int(dvalue_p))
@@ -995,6 +999,7 @@ async def _dispatch_callback(
             f"🏢 Банк: {PAYMENT_BANK_NAME}\n"
             f"👤 Владелец: {PAYMENT_ACCOUNT_HOLDER}\n\n"
             "📝 В комментарии к переводу укажите имя ученика.\n"
+            f"{promo_not_applicable_note}"
             f"{promo_block}\n"
             "📸 После оплаты отправьте фото или PDF-файл чека в этот чат.",
             payment_kb,
@@ -1126,6 +1131,19 @@ async def _dispatch_callback(
 
         data["payment_type_label"] = payment_type_label
         set_max_fsm_state(user_id, PAYMENT_PROOF, data)
+        active_promo = get_active_promo_for_max_user(user_id)
+        if promo:
+            package_kb = keyboard(
+                [btn("🚫 Оплатить без промокода", "pay_skip_promo")],
+                [btn("← Назад", "pay_back_to_type")],
+            )
+        elif not active_promo:
+            package_kb = keyboard(
+                [btn("🎟 Ввести промокод", "enter_promo")],
+                [btn("← Назад", "pay_back_to_type")],
+            )
+        else:
+            package_kb = keyboard([btn("← Назад", "pay_back_to_type")])
         await _reply(
             api, user_id, message_id,
             f"💰 Тип оплаты: {payment_type_label}"
@@ -1137,6 +1155,7 @@ async def _dispatch_callback(
             "📝 В комментарии к переводу укажите имя ученика.\n"
             f"{promo_block}\n"
             "📸 После оплаты отправьте фото или PDF-файл чека в этот чат.",
+            package_kb,
         )
         return
 
@@ -1385,9 +1404,13 @@ async def _dispatch_callback(
         method = payload.split("contact_", 1)[1]
         data["contact_method"] = method
         if method == "MAX":
-            data["contact_value"] = f"@{username}" if username else f"MAX:{user_id}"
-            set_max_fsm_state(user_id, APP_COMMENT, data)
-            await _reply(api, user_id, message_id, "💬 Оставьте комментарий или напишите «-» чтобы пропустить:")
+            if username:
+                data["contact_value"] = f"@{username}"
+                set_max_fsm_state(user_id, APP_COMMENT, data)
+                await _reply(api, user_id, message_id, "💬 Оставьте комментарий или напишите «-» чтобы пропустить:")
+            else:
+                set_max_fsm_state(user_id, APP_CONTACT_VALUE, data)
+                await _reply(api, user_id, message_id, "📞 У вас нет username в MAX. Введите номер телефона для связи (например: +79001234567):", back_kb())
         elif method == "Telegram":
             set_max_fsm_state(user_id, APP_CONTACT_VALUE, data)
             await _reply(api, user_id, message_id, "📱 Введите ваш Telegram @username (например: @username):", back_kb())

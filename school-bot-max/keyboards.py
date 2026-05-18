@@ -192,10 +192,10 @@ def package_selection_kb(packages: dict, promo=None) -> list[dict]:
     for lessons, price in sorted(packages.items()):
         if promo_dtype == "fixed_rub":
             discounted = max(0, price - int(promo_dvalue))
-            label = f"{lessons} зан. — {_strike(_fmt_price(price) + '₽')} → {_fmt_price(discounted)}₽"
+            label = f"{lessons} зан. — {_fmt_price(discounted)}₽ (скидка {int(promo_dvalue)}₽)"
         elif promo_dtype == "percent":
             discounted = int(price * (1 - promo_dvalue / 100))
-            label = f"{lessons} зан. — {_strike(_fmt_price(price) + '₽')} → {_fmt_price(discounted)}₽"
+            label = f"{lessons} зан. — {_fmt_price(discounted)}₽ (скидка {int(promo_dvalue)}%)"
         else:
             label = f"{lessons} зан. — {_fmt_price(price)}₽"
         rows.append([btn(label, f"pay_package_{lessons}")])

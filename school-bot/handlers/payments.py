@@ -28,7 +28,7 @@ from shared.database import (
     log_admin_action,
     try_transition_payment_request_status,
 )
-from shared.max_api import MaxApiClient
+from shared.max_api import MaxApiClient, btn as max_btn, keyboard as max_keyboard
 
 _MAX_BOT_TOKEN = os.getenv("SCHOOL_MAX_BOT_TOKEN")
 _max_client: MaxApiClient | None = MaxApiClient(_MAX_BOT_TOKEN) if _MAX_BOT_TOKEN else None
@@ -747,6 +747,7 @@ async def reject_payment_request(callback: CallbackQuery):
                 await _max_client.send_message(
                     max_user_id,
                     "❌ Ваша оплата отклонена.\n\nПроверьте чек или свяжитесь с администратором.",
+                    max_keyboard([max_btn("👤 Личный кабинет", "menu_cabinet")]),
                 )
             except Exception:
                 pass
@@ -1091,6 +1092,7 @@ async def _apply_topup(
                     f"На баланс начислено {lessons_to_add} занятий.\n"
                     f"📚 Предмет: {subject_name}\n"
                     f"👨‍🏫 Преподаватель: {teacher_name}",
+                    max_keyboard([max_btn("👤 Личный кабинет", "menu_cabinet")]),
                 )
             except Exception:
                 pass

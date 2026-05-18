@@ -304,11 +304,13 @@ def build_cabinet_text(
         lines.append("")
         lines.append("💳 <b>Последние оплаты</b>")
         for payment in recent_payments[:2]:
-            payment_id, status, _, created_at, _, lessons_added = payment
+            payment_id, status, _, created_at, _, lessons_added = payment[:6]
+            source_platform = payment[6] if len(payment) > 6 else "telegram"
             date_view = str(created_at)[:10] if created_at else "—"
             status_label = format_payment_status(status)
             lessons_str = f" (+{lessons_added} зан.)" if lessons_added else ""
-            lines.append(f"  • #{payment_id} {date_view}: {status_label}{lessons_str}")
+            platform_str = " 📱MAX" if source_platform == "max" else ""
+            lines.append(f"  • #{payment_id} {date_view}: {status_label}{lessons_str}{platform_str}")
 
     return "\n".join(lines)
 
