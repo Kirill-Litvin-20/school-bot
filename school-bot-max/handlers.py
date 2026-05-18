@@ -669,7 +669,8 @@ async def _process_payment_file(
 
         # Determine if promo was actually applied
         promo = get_active_promo_for_max_user(user_id)
-        promo_applied = promo if (promo and not skip_promo and payment_type != "pay_debt") else None
+        promo_applicable = fsm_data.get("promo_applicable", True)
+        promo_applied = promo if (promo and not skip_promo and payment_type != "pay_debt" and promo_applicable) else None
         promo_code_id_used = promo_applied[0] if promo_applied else None
 
         payment_request_id = create_payment_request_max(
@@ -1113,6 +1114,16 @@ async def _dispatch_callback(
         promo = get_active_promo_for_max_user(user_id)
         payment_type_label = f"📦 Пакет {lessons} занятий"
 
+        # Check if promo applies to packages
+        promo_not_applicable_note = ""
+        if promo:
+            _, _, _, _, applies_to_packages = promo
+            applies_to_pkg = int(applies_to_packages or 0) in (1, 2)
+            if not applies_to_pkg:
+                _, promo_code_str, _, _, _ = promo
+                promo_not_applicable_note = f"\n🎟 Промокод {promo_code_str} применяется только к разовым занятиям\n"
+                promo = None
+
         # Price calculation
         price_block = f"\n💵 Стоимость пакета: {price}₽\n"
         promo_block = ""
@@ -1130,6 +1141,7 @@ async def _dispatch_callback(
                 promo_block = f"\n🎟 Применён промокод {code} ({int(dvalue_f)}{unit})\n"
 
         data["payment_type_label"] = payment_type_label
+        data["promo_applicable"] = promo is not None
         set_max_fsm_state(user_id, PAYMENT_PROOF, data)
         active_promo = get_active_promo_for_max_user(user_id)
         if promo:
@@ -1137,7 +1149,7 @@ async def _dispatch_callback(
                 [btn("🚫 Оплатить без промокода", "pay_skip_promo")],
                 [btn("← Назад", "pay_back_to_type")],
             )
-        elif not active_promo:
+        elif not active_promo or promo_not_applicable_note:
             package_kb = keyboard(
                 [btn("🎟 Ввести промокод", "enter_promo")],
                 [btn("← Назад", "pay_back_to_type")],
@@ -1153,6 +1165,7 @@ async def _dispatch_callback(
             f"🏢 Банк: {PAYMENT_BANK_NAME}\n"
             f"👤 Владелец: {PAYMENT_ACCOUNT_HOLDER}\n\n"
             "📝 В комментарии к переводу укажите имя ученика.\n"
+            f"{promo_not_applicable_note}"
             f"{promo_block}\n"
             "📸 После оплаты отправьте фото или PDF-файл чека в этот чат.",
             package_kb,
