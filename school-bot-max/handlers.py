@@ -121,12 +121,24 @@ def _is_valid_tg_username(text: str) -> bool:
 
 def _format_payment_status(status: str) -> str:
     return {
-        "pending": "⏳ Ожидает проверки",
-        "processing": "🔄 На проверке",
-        "approved": "✅ Подтверждена",
-        "rejected": "❌ Отклонена",
-        "expired": "⌛ Просрочена",
+        "pending":    "⏳ ожидает",
+        "processing": "🔄 проверяется",
+        "approved":   "✅ принята",
+        "rejected":   "❌ отклонена",
+        "expired":    "⌛ просрочена",
     }.get(status, status)
+
+
+_MONTHS_SHORT = ["янв", "фев", "мар", "апр", "мая", "июн",
+                 "июл", "авг", "сен", "окт", "ноя", "дек"]
+
+
+def _fmt_short_date(date_str: str) -> str:
+    try:
+        y, m, d = date_str.split("-")
+        return f"{int(d)} {_MONTHS_SHORT[int(m) - 1]}"
+    except Exception:
+        return date_str or "—"
 
 
 def _format_attendance_status(status: str) -> str:
@@ -180,7 +192,7 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
         if recent:
             lines.extend(["", "🗓 Последние занятия"])
             for entry in recent:
-                date_view = (entry["lesson_date"] or "—")[:10]
+                date_view = _fmt_short_date((entry["lesson_date"] or "")[:10])
                 lines.append(
                     f"  • {date_view} — {entry['subject_name']}: "
                     f"{_format_attendance_status(entry['status'])}"
@@ -189,12 +201,12 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
     if payments:
         lines.extend(["", "💳 Последние оплаты"])
         for p in payments[:4]:
-            pid, status, caption, created_at, _, lessons = p[:6]
+            _, status, _, created_at, _, lessons = p[:6]
             source_platform = p[6] if len(p) > 6 else "max"
-            date_view = str(created_at)[:10] if created_at else "—"
-            lessons_str = f" (+{lessons} зан.)" if lessons else ""
-            platform_str = " 📱MAX" if source_platform == "max" else " TG"
-            lines.append(f"  • #{pid} {date_view}: {_format_payment_status(status)}{lessons_str}{platform_str}")
+            date_view = _fmt_short_date(str(created_at)[:10] if created_at else "")
+            lessons_str = f" +{lessons} зан." if lessons else ""
+            platform_str = " 📱" if source_platform == "max" else " TG"
+            lines.append(f"  • {date_view}{platform_str} — {_format_payment_status(status)}{lessons_str}")
 
     return "\n".join(lines)
 
