@@ -68,7 +68,7 @@ from shared.database import (
     get_active_review_cards,
     get_max_fsm_state,
     get_recent_attendance_for_student,
-    get_recent_payment_history_by_max_user,
+    get_recent_payment_history_by_student_id,
     get_student_directions,
     get_teacher_catalog_name_subject_pairs,
     link_max_to_student,
@@ -187,10 +187,12 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
     if payments:
         lines.extend(["", "💳 Последние оплаты"])
         for p in payments[:4]:
-            pid, status, caption, created_at, _, lessons = p
+            pid, status, caption, created_at, _, lessons = p[:6]
+            source_platform = p[6] if len(p) > 6 else "max"
             date_view = str(created_at)[:10] if created_at else "—"
             lessons_str = f" (+{lessons} зан.)" if lessons else ""
-            lines.append(f"  • #{pid} {date_view}: {_format_payment_status(status)}{lessons_str}")
+            platform_str = " 📱MAX" if source_platform == "max" else " TG"
+            lines.append(f"  • #{pid} {date_view}: {_format_payment_status(status)}{lessons_str}{platform_str}")
 
     return "\n".join(lines)
 
@@ -807,7 +809,7 @@ async def _dispatch_callback(
             return
         student_id, student_name, telegram_id, _ = students[0]
         directions = get_student_directions(student_id)
-        payments = get_recent_payment_history_by_max_user(user_id, limit=4)
+        payments = get_recent_payment_history_by_student_id(student_id, limit=4)
         text = _build_cabinet_text(student_name, directions, payments, student_id=student_id)
         await _reply(api, user_id, message_id, text, cabinet_kb(tg_linked=bool(telegram_id)))
         return

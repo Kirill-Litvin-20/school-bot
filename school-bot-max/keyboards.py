@@ -53,6 +53,7 @@ def cabinet_kb(tg_linked: bool = False) -> list[dict]:
     rows = [
         [btn("💳 Оплатить занятия", "menu_paid")],
         [btn("🎟 Ввести промокод", "enter_promo")],
+        [btn("🎁 Реферальный код", "show_referral_code")],
         [btn_url("✉️ Написать администратору", "https://t.me/integral_school_ru")],
     ]
     if tg_linked:
