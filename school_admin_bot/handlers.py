@@ -247,13 +247,13 @@ def build_payment_prompt_keyboard_clean() -> InlineKeyboardMarkup | None:
     )
 
 
-async def _send_max_notification(max_user_id: int, text: str) -> None:
+async def _send_max_notification(max_user_id: int, text: str, max_kb=None) -> None:
     if not MAX_BOT_TOKEN:
         return
     try:
         from shared.max_api import MaxApiClient
         api = MaxApiClient(MAX_BOT_TOKEN)
-        await api.send_message(max_user_id, text)
+        await api.send_message(max_user_id, text, max_kb)
     except Exception as exc:
         logger.warning("Failed to send MAX notification to user %s: %s", max_user_id, exc)
 
@@ -286,7 +286,9 @@ async def notify_student_about_attendance_clean(
         if student_telegram_id:
             await send_student_notification(callback, student_telegram_id, text)
         if student_max_id:
-            await _send_max_notification(student_max_id, text)
+            from shared.max_api import btn as _mbtn, keyboard as _mkb
+            max_kb = _mkb([_mbtn("👤 Личный кабинет", "menu_cabinet")])
+            await _send_max_notification(student_max_id, text, max_kb)
         return
 
     lines = [
@@ -303,6 +305,7 @@ async def notify_student_about_attendance_clean(
     ]
 
     reply_markup = None
+    max_kb = None
     if lesson_balance_after < 0:
         lines.extend(
             [
@@ -313,8 +316,15 @@ async def notify_student_about_attendance_clean(
             ]
         )
         reply_markup = build_payment_prompt_keyboard_clean()
+        from shared.max_api import btn as _mbtn, keyboard as _mkb
+        max_kb = _mkb(
+            [_mbtn("👤 Личный кабинет", "menu_cabinet")],
+            [_mbtn("💸 Погасить долг", "menu_paid")],
+        )
     elif lesson_balance_after == 0:
         lines.extend(["", "На балансе больше не осталось оплаченных занятий."])
+        from shared.max_api import btn as _mbtn, keyboard as _mkb
+        max_kb = _mkb([_mbtn("👤 Личный кабинет", "menu_cabinet")])
 
     if tariff_type == "single":
         lines.extend(
@@ -325,12 +335,19 @@ async def notify_student_about_attendance_clean(
         )
         if reply_markup is None:
             reply_markup = build_payment_prompt_keyboard_clean()
+        if max_kb is None:
+            from shared.max_api import btn as _mbtn, keyboard as _mkb
+            max_kb = _mkb([_mbtn("💳 Оплатить занятия", "menu_paid")])
+
+    if max_kb is None:
+        from shared.max_api import btn as _mbtn, keyboard as _mkb
+        max_kb = _mkb([_mbtn("👤 Личный кабинет", "menu_cabinet")])
 
     text = "\n".join(lines)
     if student_telegram_id:
         await send_student_notification(callback, student_telegram_id, text, reply_markup=reply_markup)
     if student_max_id:
-        await _send_max_notification(student_max_id, text)
+        await _send_max_notification(student_max_id, text, max_kb)
 
 
 def format_debt_report_text(report_data: dict, overdue_days: int) -> str:
@@ -2891,6 +2908,7 @@ async def bal_notify_send(callback: CallbackQuery):
     ]
 
     reply_markup = None
+    max_kb = None
     if lesson_balance < 0:
         lines.extend([
             "",
@@ -2899,6 +2917,14 @@ async def bal_notify_send(callback: CallbackQuery):
             "❗❗❗ Пожалуйста, внесите оплату. ❗❗❗",
         ])
         reply_markup = build_payment_prompt_keyboard_clean()
+        from shared.max_api import btn as _mbtn, keyboard as _mkb
+        max_kb = _mkb(
+            [_mbtn("👤 Личный кабинет", "menu_cabinet")],
+            [_mbtn("💸 Погасить долг", "menu_paid")],
+        )
+    else:
+        from shared.max_api import btn as _mbtn, keyboard as _mkb
+        max_kb = _mkb([_mbtn("👤 Личный кабинет", "menu_cabinet")])
 
     text = "\n".join(lines)
 
@@ -2907,7 +2933,7 @@ async def bal_notify_send(callback: CallbackQuery):
         await send_student_notification(callback, student_telegram_id, text, reply_markup=reply_markup)
         sent = True
     if student_max_id:
-        await _send_max_notification(student_max_id, text)
+        await _send_max_notification(student_max_id, text, max_kb)
         sent = True
 
     await callback.message.edit_reply_markup(reply_markup=None)

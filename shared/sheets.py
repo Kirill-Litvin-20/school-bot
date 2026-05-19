@@ -35,7 +35,11 @@ _PAYOUTS_HEADER  = ["Период", "Преподаватель", "Заняти�
 _BALANCES_HEADER = ["Ученик", "Направление", "Препод", "Баланс", "Статус"]
 _STATS_HEADER    = ["Показатель", "Занятий", "", "День недели", "Занятий"]  # 5-col split view
 _REVENUE_SHEET  = "Выручка"
-_REVENUE_HEADER = ["Период", "Даты", "Занятий", "Выручка (₽)", "Хозяину (₽)", "Преподам (₽)"]
+_REVENUE_HEADER = [
+    "Дата / Период", "Время / Даты", "Ученик", "Препод",
+    "Тип оплаты", "Занятий", "Сумма (₽)", "Преподу (₽)", "Хозяину (₽)", "Кто добавил",
+]
+_N_REV = 10  # column count for the revenue sheet
 _C_REVENUE_HEADER = {"red": 0.027, "green": 0.408, "blue": 0.392}  # dark teal
 
 _TOPUPS_SHEET  = "Пополнения"
@@ -739,34 +743,49 @@ class SheetsClient:
             return False
 
     def update_revenue_sheet(self, revenue: dict) -> bool:
-        """Rewrite the «Выручка» sheet with owner revenue breakdown."""
+        """Rewrite the «Выручка» sheet.
+
+        Layout (10 columns — see _REVENUE_HEADER):
+          1. Строка «Обновлено»
+          2. СВОДКА — быстрые итоги: Сегодня / Эта неделя / Этот месяц / Всё время
+          3. ПО НЕДЕЛЯМ — последние 8 недель
+          4. ПО МЕСЯЦАМ — последние 6 месяцев
+          5. ИТОГО ЗА ВСЁ ВРЕМЯ
+          6. ВСЕ ПЛАТЕЖИ — детальная история каждого пополнения
+
+        Как считается (правило неизменно):
+          Выручка  = фактически уплаченная сумма (amount_paid), или lessons × 1500 для старых записей
+          Преподу  = lessons × 1000 (всегда 1000 за занятие, вне зависимости от тарифа)
+          Хозяину  = Выручка − Преподу
+        """
         if not self.is_configured():
             return False
         try:
             from datetime import datetime as _dt, timedelta as _td
+            import calendar as _cal
             sp = self._open_spreadsheet()
             if sp is None:
                 return False
-            ws = self._get_or_add_worksheet(sp, _REVENUE_SHEET, cols=6)
+            ws = self._get_or_add_worksheet(sp, _REVENUE_SHEET, cols=_N_REV)
             ws.clear()
 
+            # ── helpers ──────────────────────────────────────────────────────
             _months_ru = {
-                "01": "январь", "02": "февраль", "03": "март", "04": "апрель",
-                "05": "май", "06": "июнь", "07": "июль", "08": "август",
-                "09": "сентябрь", "10": "октябрь", "11": "ноябрь", "12": "декабрь",
+                "01": "январь",  "02": "февраль", "03": "март",    "04": "апрель",
+                "05": "май",     "06": "июнь",    "07": "июль",    "08": "август",
+                "09": "сентябрь","10": "октябрь", "11": "ноябрь",  "12": "декабрь",
             }
             _months_ru_gen = {
-                "01": "января", "02": "февраля", "03": "марта", "04": "апреля",
-                "05": "мая", "06": "июня", "07": "июля", "08": "августа",
-                "09": "сентября", "10": "октября", "11": "ноября", "12": "декабря",
+                "01": "января",  "02": "февраля", "03": "марта",   "04": "апреля",
+                "05": "мая",     "06": "июня",    "07": "июля",    "08": "августа",
+                "09": "сентября","10": "октября", "11": "ноября",  "12": "декабря",
             }
 
             def _parse_date(s: str) -> _dt | None:
-                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"):
-                    try:
-                        return _dt.strptime(str(s)[:19], fmt[:len(fmt)])
-                    except Exception:
-                        pass
+                try:
+                    return _dt.strptime(str(s)[:19], "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    pass
                 try:
                     return _dt.strptime(str(s)[:10], "%Y-%m-%d")
                 except Exception:
@@ -775,143 +794,286 @@ class SheetsClient:
             def _rub(n: int) -> str:
                 return f"{n:,}".replace(",", " ") + " ₽"
 
-            def data_row(period: str, dates: str, lessons: int, rev: int, teacher_pay: int, owner_cut: int) -> list:
-                return [period, dates, lessons, _rub(rev), _rub(owner_cut), _rub(teacher_pay)]
-
-            rows_data: list[list] = []
-            format_requests_meta: list[dict] = []  # {type, row_1based}
-
-            # "Обновлено" row — prepended so all meta row indices shift naturally
-            rows_data.append([f"Обновлено: {_now_msk_str()}", "", "", "", "", ""])
-            format_requests_meta.append({"type": "updated_row", "row": len(rows_data)})
-
-            # ── ЗАГОЛОВОК БЛОКА: ПО НЕДЕЛЯМ ───────────────────────────────
-            rows_data.append(["📅 ПО НЕДЕЛЯМ", "", "", "", "", ""])
-            format_requests_meta.append({"type": "section", "row": len(rows_data)})
-
-            weeks = revenue.get("weeks", [])
-            for i, w in enumerate(weeks):
-                d = _parse_date(w.get("week_start", ""))
-                if d:
-                    d_end = d + _td(days=6)
-                    if d.month == d_end.month:
-                        dates = f"{d.day}–{d_end.day} {_months_ru_gen.get(d.strftime('%m'), '')} {d.year}"
-                    else:
-                        dates = (f"{d.day} {_months_ru_gen.get(d.strftime('%m'), '')} – "
-                                 f"{d_end.day} {_months_ru_gen.get(d_end.strftime('%m'), '')} {d_end.year}")
-                    wnum = d.isocalendar()[1]
-                    period = f"Неделя {wnum}"
+            def _type_label(tariff: str, op_type: str, lessons: int,
+                             promo_code: str = "") -> str:
+                if op_type == "initial_balance":
+                    base = "Стартовый баланс"
+                elif tariff in ("per_lesson", "single"):
+                    base = "Одиночное занятие"
+                elif tariff == "package":
+                    base = f"Пакет × {lessons} зан."
+                elif tariff == "subscription":
+                    base = "Абонемент"
                 else:
-                    dates = w.get("week_key", "")
-                    period = "Неделя"
-                is_current = (i == 0)
-                rows_data.append(data_row(period, dates,
-                                          w["lessons"], w["revenue"], w["teacher_pay"], w["owner_cut"]))
-                format_requests_meta.append({"type": "week_current" if is_current else "week", "row": len(rows_data)})
+                    base = tariff or "Прочее"
+                return f"{base}  🏷 {promo_code}" if promo_code else base
 
-            rows_data.append(["", "", "", "", "", ""])
+            # Row builders — all produce _N_REV=10 columns
+            def _empty() -> list:
+                return [""] * _N_REV
 
-            # ── ЗАГОЛОВОК БЛОКА: ПО МЕСЯЦАМ ───────────────────────────────
-            rows_data.append(["📆 ПО МЕСЯЦАМ", "", "", "", "", ""])
-            format_requests_meta.append({"type": "section", "row": len(rows_data)})
+            def _section_row(title: str) -> list:
+                return [title] + [""] * (_N_REV - 1)
 
+            def _period_row(label: str, dates: str, d: dict, bold_hint: bool = False) -> list:
+                # cols: A=label, B=dates, C-E=blank, F=lessons, G=revenue, H=teacher, I=owner, J=blank
+                return [label, dates, "", "", "",
+                        d.get("lessons", 0),
+                        _rub(d.get("revenue", 0)),
+                        _rub(d.get("teacher_pay", 0)),
+                        _rub(d.get("owner_cut", 0)),
+                        ""]
+
+            def _payment_row(p: dict) -> list:
+                date_s, time_s, _ = _split_dt(p["created_at"])
+                amount_str = _rub(p["eff_amount"])
+                if p["is_estimated"]:
+                    amount_str += " *"
+                promo = p.get("promo_code", "")
+                return [
+                    date_s, time_s,
+                    p["student_name"], p["teacher_name"],
+                    _type_label(p["tariff_type"], p["operation_type"],
+                                p["lessons_delta"], promo),
+                    p["lessons_delta"],
+                    amount_str,
+                    _rub(p["teacher_pay"]),
+                    _rub(p["owner_cut"]),
+                    p["created_by_name"],
+                ]
+
+            # ── Build rows with format metadata ──────────────────────────────
+            rows_data: list[list] = []
+            fmt: list[dict] = []  # {type, row} — row is 1-based data index (sheet row = row+1 due to header)
+
+            def _add(row: list, fmt_type: str | None = None) -> None:
+                rows_data.append(row)
+                if fmt_type:
+                    fmt.append({"type": fmt_type, "row": len(rows_data)})
+
+            # ── Строка «Обновлено» ────────────────────────────────────────────
+            _add([f"Обновлено: {_now_msk_str()}"] + [""] * (_N_REV - 1), "updated_row")
+            _add(_empty())
+
+            # ── 1. СВОДКА ─────────────────────────────────────────────────────
+            _add(_section_row("📊 ИТОГОВАЯ СВОДКА"), "section")
+            # sub-header for the summary columns
+            _add(["Период", "", "", "", "", "Занятий", "Выручка", "Преподу", "Хозяину", ""], "subheader_num")
+            summary = revenue.get("summary", {})
+            _summary_rows = [
+                ("Сегодня",       summary.get("today",      {})),
+                ("Эта неделя",    summary.get("this_week",  {})),
+                ("Этот месяц",    summary.get("this_month", {})),
+            ]
+            for label, d in _summary_rows:
+                _add(_period_row(label, "", d or {}), "summary_row")
+            _add(_period_row("🏆 Всё время", "С начала работы",
+                             summary.get("total", {
+                                 "lessons":     revenue.get("total", 0),
+                                 "revenue":     revenue.get("total_revenue", 0),
+                                 "teacher_pay": revenue.get("total_teacher_pay", 0),
+                                 "owner_cut":   revenue.get("total_owner_cut", 0),
+                             })), "summary_total")
+            _add(_empty())
+
+            # ── 2. ПО НЕДЕЛЯМ ─────────────────────────────────────────────────
+            weeks = revenue.get("weeks", [])
+            if weeks:
+                _add(_section_row("📅 ПО НЕДЕЛЯМ"), "section")
+                _add(["Неделя", "Даты", "", "", "", "Занятий", "Выручка", "Преподу", "Хозяину", ""],
+                     "subheader_num")
+                for i, w in enumerate(weeks):
+                    d = _parse_date(w.get("week_start", ""))
+                    if d:
+                        d_end = d + _td(days=6)
+                        if d.month == d_end.month:
+                            dates = (f"{d.day}–{d_end.day} "
+                                     f"{_months_ru_gen.get(d.strftime('%m'), '')} {d.year}")
+                        else:
+                            dates = (f"{d.day} {_months_ru_gen.get(d.strftime('%m'), '')} – "
+                                     f"{d_end.day} {_months_ru_gen.get(d_end.strftime('%m'), '')} {d_end.year}")
+                        label = f"Неделя {d.isocalendar()[1]}"
+                    else:
+                        dates = w.get("week_key", "")
+                        label = "Неделя"
+                    _add(_period_row(label, dates, w),
+                         "week_current" if i == 0 else "week")
+                _add(_empty())
+
+            # ── 3. ПО МЕСЯЦАМ ─────────────────────────────────────────────────
             months = revenue.get("months", [])
-            for i, m in enumerate(months):
-                try:
-                    year, mon = m["month_key"].split("-")
-                    period = f"{_months_ru.get(mon, mon).capitalize()} {year}"
-                    import calendar
-                    last_day = calendar.monthrange(int(year), int(mon))[1]
-                    dates = f"1–{last_day} {_months_ru_gen.get(mon, '')} {year}"
-                except Exception:
-                    period = m.get("month_key", "")
-                    dates = ""
-                is_current = (i == 0)
-                rows_data.append(data_row(period, dates,
-                                          m["lessons"], m["revenue"], m["teacher_pay"], m["owner_cut"]))
-                format_requests_meta.append({"type": "month_current" if is_current else "month", "row": len(rows_data)})
+            if months:
+                _add(_section_row("📆 ПО МЕСЯЦАМ"), "section")
+                _add(["Месяц", "Даты", "", "", "", "Занятий", "Выручка", "Преподу", "Хозяину", ""],
+                     "subheader_num")
+                for i, m in enumerate(months):
+                    try:
+                        year, mon = m["month_key"].split("-")
+                        label = f"{_months_ru.get(mon, mon).capitalize()} {year}"
+                        last_day = _cal.monthrange(int(year), int(mon))[1]
+                        dates = f"1–{last_day} {_months_ru_gen.get(mon, '')} {year}"
+                    except Exception:
+                        label = m.get("month_key", "")
+                        dates = ""
+                    _add(_period_row(label, dates, m),
+                         "month_current" if i == 0 else "month")
+                _add(_empty())
 
-            rows_data.append(["", "", "", "", "", ""])
+            # ── 4. ИТОГО ЗА ВСЁ ВРЕМЯ ────────────────────────────────────────
+            _add(_period_row(
+                "🏆 ИТОГО ЗА ВСЁ ВРЕМЯ", "С начала работы",
+                {"lessons":     revenue.get("total", 0),
+                 "revenue":     revenue.get("total_revenue", 0),
+                 "teacher_pay": revenue.get("total_teacher_pay", 0),
+                 "owner_cut":   revenue.get("total_owner_cut", 0)},
+            ), "grand_total")
+            _add(_empty())
 
-            # ── ИТОГО ЗА ВСЁ ВРЕМЯ ────────────────────────────────────────
-            rows_data.append(data_row(
-                "🏆 Всё время", "С начала работы",
-                revenue.get("total", 0),
-                revenue.get("total_revenue", 0),
-                revenue.get("total_teacher_pay", 0),
-                revenue.get("total_owner_cut", 0),
-            ))
-            format_requests_meta.append({"type": "total", "row": len(rows_data)})
+            # ── 5. ВСЕ ПЛАТЕЖИ ────────────────────────────────────────────────
+            payments = revenue.get("payments", [])
+            _add(_section_row("💳 ВСЕ ПЛАТЕЖИ — ДЕТАЛЬНАЯ ИСТОРИЯ"), "section")
+            # sub-header mirrors the main frozen header
+            _add(list(_REVENUE_HEADER), "detail_subheader")
 
-            header = ["Период", "Даты", "Занятий", "Выручка", "Хозяину", "Преподам"]
-            ws.update("A1", [header] + rows_data, value_input_option="USER_ENTERED")
+            if payments:
+                for p in payments:
+                    op     = p.get("operation_type", "")
+                    tariff = p.get("tariff_type", "per_lesson")
+                    promo  = p.get("promo_code", "")
+                    if op == "initial_balance":
+                        fmt_type = "pay_initial"
+                    elif promo:
+                        fmt_type = "pay_promo"
+                    elif tariff == "package":
+                        fmt_type = "pay_package"
+                    elif tariff == "subscription":
+                        fmt_type = "pay_subscription"
+                    else:
+                        fmt_type = "pay_per_lesson"
+                    _add(_payment_row(p), fmt_type)
+            else:
+                _add(["Нет данных"] + [""] * (_N_REV - 1))
 
+            # ── Write to sheet ────────────────────────────────────────────────
+            ws.update("A1", [list(_REVENUE_HEADER)] + rows_data, value_input_option="USER_ENTERED")
+
+            # ── Formatting ────────────────────────────────────────────────────
             sheet_id = ws.id
-            _C_SECTION      = {"red": 0.204, "green": 0.220, "blue": 0.271}   # очень тёмно-синий
-            _C_WEEK_CUR     = {"red": 0.800, "green": 0.953, "blue": 0.820}   # ярко-зелёный (текущая неделя)
+            _C_SECTION      = {"red": 0.122, "green": 0.137, "blue": 0.192}   # очень тёмно-синий
+            _C_SUBHDR_NUM   = {"red": 0.420, "green": 0.447, "blue": 0.518}   # средний серо-синий
+            _C_SUMMARY_ROW  = {"red": 0.988, "green": 0.957, "blue": 0.820}   # мягко-жёлтый
+            _C_SUMMARY_TOT  = {"red": 0.988, "green": 0.918, "blue": 0.737}   # золотистый
+            _C_WEEK_CUR     = {"red": 0.796, "green": 0.953, "blue": 0.816}   # ярко-зелёный
             _C_WEEK         = {"red": 0.918, "green": 0.980, "blue": 0.918}   # бледно-зелёный
-            _C_MONTH_CUR    = {"red": 0.800, "green": 0.878, "blue": 0.980}   # ярко-синий (текущий месяц)
+            _C_MONTH_CUR    = {"red": 0.796, "green": 0.878, "blue": 0.980}   # ярко-синий
             _C_MONTH        = {"red": 0.918, "green": 0.945, "blue": 0.980}   # бледно-синий
-            _C_TOTAL        = {"red": 0.988, "green": 0.918, "blue": 0.737}   # золотистый
+            _C_GRAND_TOTAL  = {"red": 0.988, "green": 0.878, "blue": 0.698}   # насыщенный золотой
+            _C_DET_SUBHDR   = {"red": 0.027, "green": 0.490, "blue": 0.471}   # тёмный тил (как шапка, но светлее)
+            _C_PAY_LESSON   = {"red": 0.851, "green": 0.933, "blue": 0.843}   # светло-зелёный
+            _C_PAY_PACKAGE  = {"red": 0.839, "green": 0.863, "blue": 0.980}   # светло-лавандовый
+            _C_PAY_SUBS     = {"red": 0.988, "green": 0.906, "blue": 0.796}   # светло-оранжевый
+            _C_PAY_INIT     = {"red": 0.882, "green": 0.882, "blue": 0.882}   # светло-серый
+            _C_PAY_PROMO    = {"red": 0.929, "green": 0.796, "blue": 0.961}   # светло-фиолетовый (промокод)
+            _C_UPDATED      = {"red": 0.949, "green": 0.949, "blue": 0.949}
 
-            _C_TEXT_WHITE   = {"red": 1.0, "green": 1.0, "blue": 1.0}
-            _C_TEXT_BLACK   = {"red": 0.1, "green": 0.1, "blue": 0.1}
+            _color_map = {
+                "week_current":    (_C_WEEK_CUR,    True),
+                "week":            (_C_WEEK,         False),
+                "month_current":   (_C_MONTH_CUR,   True),
+                "month":           (_C_MONTH,        False),
+                "summary_row":     (_C_SUMMARY_ROW,  False),
+                "summary_total":   (_C_SUMMARY_TOT,  True),
+                "grand_total":     (_C_GRAND_TOTAL,  True),
+                "pay_per_lesson":  (_C_PAY_LESSON,   False),
+                "pay_package":     (_C_PAY_PACKAGE,  False),
+                "pay_subscription":(_C_PAY_SUBS,     False),
+                "pay_initial":     (_C_PAY_INIT,     False),
+                "pay_promo":       (_C_PAY_PROMO,    False),
+            }
 
-            requests = [
-                self._header_format_request(sheet_id, 6, _C_REVENUE_HEADER),
+            end_row = len(rows_data) + 2  # 0-based exclusive end for range
+
+            requests: list[dict] = [
+                self._header_format_request(sheet_id, _N_REV, _C_REVENUE_HEADER),
                 self._freeze_request(sheet_id),
-            ] + self._col_widths_request(sheet_id, [160, 220, 80, 185, 175, 185])
+                {"updateSheetProperties": {
+                    "properties": {"sheetId": sheet_id,
+                                   "gridProperties": {"columnCount": _N_REV}},
+                    "fields": "gridProperties.columnCount",
+                }},
+                # Right-align numeric columns F–I (indices 5–8) for all data rows
+                {"repeatCell": {
+                    "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": end_row,
+                              "startColumnIndex": 5, "endColumnIndex": 9},
+                    "cell": {"userEnteredFormat": {"horizontalAlignment": "RIGHT"}},
+                    "fields": "userEnteredFormat(horizontalAlignment)",
+                }},
+            ] + self._col_widths_request(sheet_id,
+                [120, 90, 160, 145, 145, 70, 140, 135, 130, 150])
 
-            _C_UPDATED = {"red": 0.949, "green": 0.949, "blue": 0.949}
-
-            for meta in format_requests_meta:
-                r = meta["row"]   # 1-based data row → 0-based sheet row = r (header is row 0)
+            for meta in fmt:
+                r = meta["row"]   # 1-based data index → 0-based sheet row index = r (header at 0)
                 t = meta["type"]
+                n = _N_REV
+
                 if t == "updated_row":
                     requests.append({"repeatCell": {
                         "range": {"sheetId": sheet_id, "startRowIndex": r, "endRowIndex": r + 1,
-                                   "startColumnIndex": 0, "endColumnIndex": 6},
+                                  "startColumnIndex": 0, "endColumnIndex": n},
                         "cell": {"userEnteredFormat": {
                             "backgroundColor": _rgb(_C_UPDATED),
-                            "textFormat": {"italic": True,
-                                           "foregroundColor": {"red": 0.5, "green": 0.5, "blue": 0.5},
-                                           "fontSize": 9},
+                            "textFormat": {"italic": True, "fontSize": 9,
+                                           "foregroundColor": {"red": 0.5, "green": 0.5, "blue": 0.5}},
                         }},
                         "fields": "userEnteredFormat(backgroundColor,textFormat)",
                     }})
-                elif t == "section":
-                    requests.append({
-                        "repeatCell": {
-                            "range": {"sheetId": sheet_id, "startRowIndex": r, "endRowIndex": r + 1,
-                                      "startColumnIndex": 0, "endColumnIndex": 6},
-                            "cell": {"userEnteredFormat": {
-                                "backgroundColor": _rgb(_C_SECTION),
-                                "textFormat": {"foregroundColor": _C_TEXT_WHITE, "bold": True, "fontSize": 10},
-                                "horizontalAlignment": "LEFT",
-                            }},
-                            "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
-                        }
-                    })
-                else:
-                    color = {"week_current": _C_WEEK_CUR, "week": _C_WEEK,
-                             "month_current": _C_MONTH_CUR, "month": _C_MONTH,
-                             "total": _C_TOTAL}.get(t, _C_WEEK)
-                    bold = t in ("week_current", "month_current", "total")
-                    requests.append(self._row_format_request(sheet_id, r, r + 1, color, bold=bold, num_cols=6))
 
-            # Right-align numbers (cols C–F = indices 2–5), dynamic end row
-            end_row = len(rows_data) + 2
-            requests.append({
-                "repeatCell": {
-                    "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": end_row,
-                              "startColumnIndex": 2, "endColumnIndex": 6},
-                    "cell": {"userEnteredFormat": {"horizontalAlignment": "RIGHT"}},
-                    "fields": "userEnteredFormat(horizontalAlignment)",
-                }
-            })
+                elif t == "section":
+                    requests.append({"repeatCell": {
+                        "range": {"sheetId": sheet_id, "startRowIndex": r, "endRowIndex": r + 1,
+                                  "startColumnIndex": 0, "endColumnIndex": n},
+                        "cell": {"userEnteredFormat": {
+                            "backgroundColor": _rgb(_C_SECTION),
+                            "textFormat": {"foregroundColor": _C_WHITE, "bold": True, "fontSize": 10},
+                            "horizontalAlignment": "LEFT",
+                        }},
+                        "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+                    }})
+                    requests.append({"updateDimensionProperties": {
+                        "range": {"sheetId": sheet_id, "dimension": "ROWS",
+                                  "startIndex": r, "endIndex": r + 1},
+                        "properties": {"pixelSize": 28}, "fields": "pixelSize",
+                    }})
+
+                elif t == "subheader_num":
+                    requests.append({"repeatCell": {
+                        "range": {"sheetId": sheet_id, "startRowIndex": r, "endRowIndex": r + 1,
+                                  "startColumnIndex": 0, "endColumnIndex": n},
+                        "cell": {"userEnteredFormat": {
+                            "backgroundColor": _rgb(_C_SUBHDR_NUM),
+                            "textFormat": {"foregroundColor": _C_WHITE, "bold": True, "fontSize": 9},
+                        }},
+                        "fields": "userEnteredFormat(backgroundColor,textFormat)",
+                    }})
+
+                elif t == "detail_subheader":
+                    requests.append({"repeatCell": {
+                        "range": {"sheetId": sheet_id, "startRowIndex": r, "endRowIndex": r + 1,
+                                  "startColumnIndex": 0, "endColumnIndex": n},
+                        "cell": {"userEnteredFormat": {
+                            "backgroundColor": _rgb(_C_DET_SUBHDR),
+                            "textFormat": {"foregroundColor": _C_WHITE, "bold": True, "fontSize": 9},
+                        }},
+                        "fields": "userEnteredFormat(backgroundColor,textFormat)",
+                    }})
+
+                elif t in _color_map:
+                    color, bold = _color_map[t]
+                    requests.append(self._row_format_request(sheet_id, r, r + 1, color, bold=bold, num_cols=n))
 
             self._batch_format(sp, requests)
-            logger.info("Sheets: Выручка updated (%d weeks, %d months, %d total)", len(weeks), len(months), total)
+            logger.info("Sheets: Выручка updated (%d weeks, %d months, %d payments)",
+                        len(weeks), len(months), len(payments))
             return True
         except Exception as exc:
             logger.error("update_revenue_sheet failed: %s", exc)
