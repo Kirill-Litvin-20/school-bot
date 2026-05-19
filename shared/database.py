@@ -550,6 +550,7 @@ def init_db():
 
     _ensure_postgres_bigint_columns(cur)
     _ensure_promo_codes_columns(cur)
+    _ensure_balance_history_columns(cur)
     _cleanup_teacher_profiles_for_non_teacher_users(cur)
     conn.commit()
     _sync_teacher_subject_links()
@@ -612,6 +613,17 @@ def _ensure_promo_codes_columns(cur):
     spc_cols = {r[0] for r in cur.fetchall()}
     if 'used_at' not in spc_cols:
         cur.execute("ALTER TABLE student_promo_codes ADD COLUMN used_at TEXT")
+
+
+def _ensure_balance_history_columns(cur):
+    """Add amount_paid column to balance_history (actual rubles paid per topup)."""
+    cur.execute(
+        """SELECT column_name FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'balance_history'"""
+    )
+    bh_cols = {r[0] for r in cur.fetchall()}
+    if 'amount_paid' not in bh_cols:
+        cur.execute("ALTER TABLE balance_history ADD COLUMN amount_paid INTEGER NOT NULL DEFAULT 0")
 
 
 def _ensure_teachers_table_columns(cur):
@@ -1625,14 +1637,14 @@ def get_student_lesson_by_id(direction_id: int):
     return row
 
 
-def add_balance_history(student_lesson_id: int, operation_type: str, lessons_delta: int, comment: str | None, created_by: int | None):
+def add_balance_history(student_lesson_id: int, operation_type: str, lessons_delta: int, comment: str | None, created_by: int | None, amount_paid: int = 0):
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute(
         """
-        INSERT INTO balance_history (student_lesson_id, operation_type, lessons_delta, comment, created_at, created_by)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO balance_history (student_lesson_id, operation_type, lessons_delta, comment, created_at, created_by, amount_paid)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             student_lesson_id,
@@ -1640,7 +1652,8 @@ def add_balance_history(student_lesson_id: int, operation_type: str, lessons_del
             lessons_delta,
             comment,
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            created_by
+            created_by,
+            amount_paid,
         )
     )
 
@@ -1804,7 +1817,7 @@ def mark_attendance(direction_id: int, status: str, marked_by: int) -> int:
     return attendance_id
 
 
-def add_lessons_to_balance(direction_id: int, lessons_count: int, created_by: int | None = None, comment: str | None = None):
+def add_lessons_to_balance(direction_id: int, lessons_count: int, created_by: int | None = None, comment: str | None = None, amount_paid: int = 0):
     conn = get_connection()
     cur = conn.cursor()
 
@@ -1819,8 +1832,8 @@ def add_lessons_to_balance(direction_id: int, lessons_count: int, created_by: in
 
     cur.execute(
         """
-        INSERT INTO balance_history (student_lesson_id, operation_type, lessons_delta, comment, created_at, created_by)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO balance_history (student_lesson_id, operation_type, lessons_delta, comment, created_at, created_by, amount_paid)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             direction_id,
@@ -1828,7 +1841,8 @@ def add_lessons_to_balance(direction_id: int, lessons_count: int, created_by: in
             lessons_count,
             comment or "Начисление занятий",
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            created_by
+            created_by,
+            amount_paid,
         )
     )
 
@@ -2180,7 +2194,8 @@ def finalize_payment_with_topup(
     direction_id: int,
     lessons_count: int,
     admin_id: int,
-    comment: str | None = None
+    comment: str | None = None,
+    amount_paid: int = 0,
 ) -> bool:
     if lessons_count <= 0:
         return False
@@ -2222,8 +2237,8 @@ def finalize_payment_with_topup(
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cur.execute(
             """
-            INSERT INTO balance_history (student_lesson_id, operation_type, lessons_delta, comment, created_at, created_by)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO balance_history (student_lesson_id, operation_type, lessons_delta, comment, created_at, created_by, amount_paid)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 direction_id,
@@ -2231,7 +2246,8 @@ def finalize_payment_with_topup(
                 lessons_count,
                 comment or f"Начисление после подтверждения оплаты #{payment_request_id}",
                 now,
-                admin_id
+                admin_id,
+                amount_paid,
             )
         )
 
@@ -5563,71 +5579,107 @@ def consume_promo_for_student(student_id: int) -> bool:
 
 
 def get_revenue_by_period() -> dict:
-    """Return revenue stats grouped by week and month for the revenue sheet, split by tariff_type."""
+    """Return revenue stats grouped by week and month for the revenue sheet.
+
+    Revenue comes from balance_history topups (actual money paid).
+    For rows with amount_paid = 0 (historical data), falls back to lessons_delta * LESSON_PRICE.
+    Teacher payout = lessons_delta * LESSON_RATE (always 1000 per lesson).
+    Owner cut = revenue - teacher_payout.
+    """
+    lesson_price = int(os.getenv("LESSON_PRICE", "1500"))
+    lesson_rate  = int(os.getenv("LESSON_RATE",  "1000"))
+
     conn = get_connection()
     cur = conn.cursor()
 
+    # Revenue is based on topup payments (not attendance).
+    # amount_paid stores the real sum; 0 means old record → fallback to lessons * price.
     week_sql = """
         SELECT
-            TO_CHAR(a.lesson_date::date, 'IYYY-IW') AS week_key,
-            MIN(a.lesson_date) AS week_start,
-            COUNT(*) FILTER (WHERE sl.tariff_type = 'single') AS per_lesson,
-            COUNT(*) FILTER (WHERE sl.tariff_type = 'package') AS package,
-            COUNT(*) AS total
-        FROM attendance a
-        JOIN student_lessons sl ON sl.id = a.student_lesson_id
-        WHERE a.status IN ('present', 'completed')
+            TO_CHAR(bh.created_at::timestamp, 'IYYY-IW') AS week_key,
+            MIN(bh.created_at) AS week_start,
+            SUM(bh.lessons_delta) AS lessons,
+            SUM(CASE WHEN COALESCE(bh.amount_paid, 0) > 0
+                     THEN bh.amount_paid
+                     ELSE bh.lessons_delta * %(price)s END) AS revenue,
+            SUM(bh.lessons_delta) * %(rate)s AS teacher_pay
+        FROM balance_history bh
+        WHERE bh.operation_type = 'manual_topup'
+          AND bh.lessons_delta > 0
         GROUP BY week_key
         ORDER BY week_key DESC
         LIMIT 8
     """
     month_sql = """
         SELECT
-            TO_CHAR(a.lesson_date::date, 'YYYY-MM') AS month_key,
-            COUNT(*) FILTER (WHERE sl.tariff_type = 'single') AS per_lesson,
-            COUNT(*) FILTER (WHERE sl.tariff_type = 'package') AS package,
-            COUNT(*) AS total
-        FROM attendance a
-        JOIN student_lessons sl ON sl.id = a.student_lesson_id
-        WHERE a.status IN ('present', 'completed')
+            TO_CHAR(bh.created_at::timestamp, 'YYYY-MM') AS month_key,
+            SUM(bh.lessons_delta) AS lessons,
+            SUM(CASE WHEN COALESCE(bh.amount_paid, 0) > 0
+                     THEN bh.amount_paid
+                     ELSE bh.lessons_delta * %(price)s END) AS revenue,
+            SUM(bh.lessons_delta) * %(rate)s AS teacher_pay
+        FROM balance_history bh
+        WHERE bh.operation_type = 'manual_topup'
+          AND bh.lessons_delta > 0
         GROUP BY month_key
         ORDER BY month_key DESC
         LIMIT 6
     """
     total_sql = """
         SELECT
-            COUNT(*) FILTER (WHERE sl.tariff_type = 'single'),
-            COUNT(*) FILTER (WHERE sl.tariff_type = 'package'),
-            COUNT(*)
-        FROM attendance a
-        JOIN student_lessons sl ON sl.id = a.student_lesson_id
-        WHERE a.status IN ('present', 'completed')
+            SUM(bh.lessons_delta) AS lessons,
+            SUM(CASE WHEN COALESCE(bh.amount_paid, 0) > 0
+                     THEN bh.amount_paid
+                     ELSE bh.lessons_delta * %(price)s END) AS revenue,
+            SUM(bh.lessons_delta) * %(rate)s AS teacher_pay
+        FROM balance_history bh
+        WHERE bh.operation_type = 'manual_topup'
+          AND bh.lessons_delta > 0
     """
 
-    cur.execute(week_sql)
-    weeks = [
-        {"week_key": str(r[0]), "week_start": str(r[1]),
-         "per_lesson": r[2] or 0, "package": r[3] or 0, "lessons": r[4] or 0}
-        for r in cur.fetchall()
-    ]
+    params = {"price": lesson_price, "rate": lesson_rate}
 
-    cur.execute(month_sql)
-    months = [
-        {"month_key": str(r[0]),
-         "per_lesson": r[1] or 0, "package": r[2] or 0, "lessons": r[3] or 0}
-        for r in cur.fetchall()
-    ]
+    cur.execute(week_sql, params)
+    weeks = []
+    for r in cur.fetchall():
+        revenue     = int(r[3] or 0)
+        teacher_pay = int(r[4] or 0)
+        weeks.append({
+            "week_key":    str(r[0]),
+            "week_start":  str(r[1]),
+            "lessons":     int(r[2] or 0),
+            "revenue":     revenue,
+            "teacher_pay": teacher_pay,
+            "owner_cut":   revenue - teacher_pay,
+        })
 
-    cur.execute(total_sql)
+    cur.execute(month_sql, params)
+    months = []
+    for r in cur.fetchall():
+        revenue     = int(r[2] or 0)
+        teacher_pay = int(r[3] or 0)
+        months.append({
+            "month_key":   str(r[0]),
+            "lessons":     int(r[1] or 0),
+            "revenue":     revenue,
+            "teacher_pay": teacher_pay,
+            "owner_cut":   revenue - teacher_pay,
+        })
+
+    cur.execute(total_sql, params)
     tr = cur.fetchone()
-    total_per_lesson = tr[0] or 0 if tr else 0
-    total_package    = tr[1] or 0 if tr else 0
-    total            = tr[2] or 0 if tr else 0
+    total_lessons     = int(tr[0] or 0) if tr else 0
+    total_revenue     = int(tr[1] or 0) if tr else 0
+    total_teacher_pay = int(tr[2] or 0) if tr else 0
 
     conn.close()
     return {
-        "weeks": weeks, "months": months,
-        "total": total, "total_per_lesson": total_per_lesson, "total_package": total_package,
+        "weeks":             weeks,
+        "months":            months,
+        "total":             total_lessons,
+        "total_revenue":     total_revenue,
+        "total_teacher_pay": total_teacher_pay,
+        "total_owner_cut":   total_revenue - total_teacher_pay,
     }
 
 
@@ -5654,7 +5706,8 @@ def get_topups_history() -> dict:
             bh.lessons_delta,
             bh.operation_type,
             bh.comment,
-            COALESCE(u.full_name, '') AS created_by_name
+            COALESCE(u.full_name, '') AS created_by_name,
+            COALESCE(bh.amount_paid, 0) AS amount_paid
         FROM balance_history bh
         JOIN student_lessons sl ON bh.student_lesson_id = sl.id
         JOIN students s         ON sl.student_id = s.id
@@ -5675,23 +5728,35 @@ def get_topups_history() -> dict:
             "operation_type":  r[5],
             "comment":         r[6] or "",
             "created_by_name": r[7],
+            "amount_paid":     int(r[8] or 0),
         }
         for r in cur.fetchall()
     ]
 
     # Aggregates
     from datetime import date as _date, timedelta as _td
+    lesson_price = int(os.getenv("LESSON_PRICE", "1500"))
     today = _date.today()
     week_start = today - _td(days=today.weekday())
     month_start = today.replace(day=1)
 
-    total_lessons = sum(r["lessons_delta"] for r in rows)
-    week_lessons  = sum(r["lessons_delta"] for r in rows
-                        if r["created_at"][:10] >= week_start.isoformat())
-    month_lessons = sum(r["lessons_delta"] for r in rows
-                        if r["created_at"][:10] >= month_start.isoformat())
-    today_lessons = sum(r["lessons_delta"] for r in rows
-                        if r["created_at"][:10] == today.isoformat())
+    def _eff_amount(r: dict) -> int:
+        return r["amount_paid"] if r["amount_paid"] > 0 else r["lessons_delta"] * lesson_price
+
+    total_lessons  = sum(r["lessons_delta"] for r in rows)
+    week_lessons   = sum(r["lessons_delta"] for r in rows
+                         if r["created_at"][:10] >= week_start.isoformat())
+    month_lessons  = sum(r["lessons_delta"] for r in rows
+                         if r["created_at"][:10] >= month_start.isoformat())
+    today_lessons  = sum(r["lessons_delta"] for r in rows
+                         if r["created_at"][:10] == today.isoformat())
+    total_revenue  = sum(_eff_amount(r) for r in rows)
+    week_revenue   = sum(_eff_amount(r) for r in rows
+                         if r["created_at"][:10] >= week_start.isoformat())
+    month_revenue  = sum(_eff_amount(r) for r in rows
+                         if r["created_at"][:10] >= month_start.isoformat())
+    today_revenue  = sum(_eff_amount(r) for r in rows
+                         if r["created_at"][:10] == today.isoformat())
 
     conn.close()
     return {
@@ -5700,4 +5765,8 @@ def get_topups_history() -> dict:
         "week_lessons":   week_lessons,
         "month_lessons":  month_lessons,
         "today_lessons":  today_lessons,
+        "total_revenue":  total_revenue,
+        "week_revenue":   week_revenue,
+        "month_revenue":  month_revenue,
+        "today_revenue":  today_revenue,
     }

@@ -963,6 +963,7 @@ async def _apply_topup(
     source_message: Message,
     edit_target: Message | None,
     is_manual: bool,
+    amount_paid: int = 0,
 ):
     """Shared finalization for both quick-button and manual top-ups.
 
@@ -1006,6 +1007,7 @@ async def _apply_topup(
         lessons_count=lessons_to_add,
         admin_id=admin_id,
         comment=f"Начисление после подтверждения оплаты #{payment_request_id}{comment_suffix}",
+        amount_paid=amount_paid,
     )
     if not finalized:
         payment_latest = get_payment_request_by_id(payment_request_id)
@@ -1152,6 +1154,7 @@ async def add_lessons_after_payment(callback: CallbackQuery):
     payment_request_id = int(payment_request_id_raw)
     direction_id = int(direction_id_raw)
     lessons_to_add = int(lessons_to_add_raw)
+    amount_paid = PACKAGE_PRICES.get(lessons_to_add, lessons_to_add * LESSON_PRICE)
 
     await _apply_topup(
         callback.bot,
@@ -1162,6 +1165,7 @@ async def add_lessons_after_payment(callback: CallbackQuery):
         source_message=callback.message,
         edit_target=callback.message,
         is_manual=False,
+        amount_paid=amount_paid,
     )
     await callback.answer("✅ Занятия начислены")
 
@@ -1216,6 +1220,7 @@ async def process_manual_payment_amount(message: Message):
         return
 
     PENDING_MANUAL_TOPUPS.pop(message.from_user.id, None)
+    amount_paid = PACKAGE_PRICES.get(lessons_to_add, lessons_to_add * LESSON_PRICE)
 
     await _apply_topup(
         message.bot,
@@ -1226,4 +1231,5 @@ async def process_manual_payment_amount(message: Message):
         source_message=message,
         edit_target=None,
         is_manual=True,
+        amount_paid=amount_paid,
     )
