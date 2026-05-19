@@ -208,15 +208,14 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
                     f"{_format_attendance_status(entry['status'])}"
                 )
 
-    lines.extend(["", "💳 Оплаты"])
     if payments:
-        for p in payments[:4]:
-            pid, status, caption, created_at, _, lessons, *_ = p
-            date_view = str(created_at)[:10] if created_at else "—"
-            lessons_str = f" (+{lessons} зан.)" if lessons else ""
-            lines.append(f"  • #{pid} {date_view}: {_format_payment_status(status)}{lessons_str}")
-    else:
-        lines.append("  Оплат пока нет.")
+        lines.extend(["", "💳 Последние оплаты"])
+        for payment in payments[:4]:
+            _, status, _, created_at, _, lessons_added = payment[:6]
+            date_view = _fmt_short_datetime(str(created_at) if created_at else "")
+            status_label = _format_payment_status(status)
+            lessons_str = f" +{lessons_added} зан." if lessons_added else ""
+            lines.append(f"  • {date_view} — {status_label}{lessons_str}")
 
     return "\n".join(lines)
 
