@@ -82,6 +82,7 @@ def get_faq_menu_keyboard():
             [InlineKeyboardButton(text="🎟 Промокоды", callback_data="faq_promo")],
             [InlineKeyboardButton(text="🎁 Реферальная программа", callback_data="faq_referral")],
             [InlineKeyboardButton(text="👤 Привязка аккаунта", callback_data="faq_link")],
+            [InlineKeyboardButton(text="✉️ Написать администратору", url="https://t.me/integral_school_ru")],
             [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
         ]
     )

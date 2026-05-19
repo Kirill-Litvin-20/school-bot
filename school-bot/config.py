@@ -3,7 +3,11 @@ from pathlib import Path
 
 
 def _load_env() -> None:
-    env_path = Path(__file__).resolve().parent.parent / ".env"
+    env_file_override = os.environ.get("ENV_FILE", "").strip()
+    if env_file_override:
+        env_path = Path(env_file_override)
+    else:
+        env_path = Path(__file__).resolve().parent.parent / ".env"
     if not env_path.exists():
         return
 

@@ -145,8 +145,10 @@ class MaxApiClient:
     # ── file download ───────────────────────────────────────────────────────
 
     async def download_bytes(self, url: str) -> bytes:
-        async with aiohttp.ClientSession(headers=self._headers) as session:
-            async with session.get(url) as resp:
+        # MAX file URLs require access_token as query param, not Authorization header
+        params = {"access_token": self._token}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params) as resp:
                 resp.raise_for_status()
                 return await resp.read()
 

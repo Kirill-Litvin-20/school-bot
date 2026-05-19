@@ -184,13 +184,15 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
                     f"{_format_attendance_status(entry['status'])}"
                 )
 
+    lines.extend(["", "💳 Оплаты"])
     if payments:
-        lines.extend(["", "💳 Последние оплаты"])
         for p in payments[:4]:
             pid, status, caption, created_at, _, lessons = p
             date_view = str(created_at)[:10] if created_at else "—"
             lessons_str = f" (+{lessons} зан.)" if lessons else ""
             lines.append(f"  • #{pid} {date_view}: {_format_payment_status(status)}{lessons_str}")
+    else:
+        lines.append("  Оплат пока нет.")
 
     return "\n".join(lines)
 
@@ -357,10 +359,11 @@ async def handle_bot_started(api: MaxApiClient, user_id: int, name: str, usernam
     set_max_fsm_state(user_id, LINK_PHONE)
     await api.send_message(
         user_id,
-        "👋 Добро пожаловать в бот учебного центра!\n\n"
+        "👋 Добро пожаловать в бот онлайн школы «Интеграл»!\n\n"
         "Для привязки вашего личного кабинета введите номер телефона, "
         "который вы указывали при записи (например: +79001234567).\n\n"
-        "Если у вас нет кабинета в нашей системе — введите /skip и оставьте заявку через меню.",
+        "Если у вас нет кабинета в нашей системе — нажмите кнопку ниже и оставьте заявку через меню.",
+        keyboard([btn("Пропустить →", "back_to_menu")]),
     )
 
 
@@ -409,10 +412,10 @@ async def handle_text(
         elif "учен" in low:
             data["user_type"] = "Ученик"
         else:
-            await api.send_message(user_id, "❓ Напишите: ученик или родитель.")
+            await api.send_message(user_id, "❓ Напишите: ученик или родитель.", user_type_kb())
             return
         set_max_fsm_state(user_id, APP_NAME, data)
-        await api.send_message(user_id, "📝 Напишите, как к вам обращаться (имя или имя + фамилия):")
+        await api.send_message(user_id, "📝 Напишите, как к вам обращаться (имя или имя + фамилия):", back_kb())
 
     elif state == APP_NAME:
         data["name"] = text
@@ -514,7 +517,7 @@ async def handle_file(
         return
     fname = (filename or "").lower()
     if not fname.endswith(".pdf"):
-        await api.send_message(user_id, "❓ Пожалуйста, отправьте PDF-файл чека.")
+        await api.send_message(user_id, "❓ Пожалуйста, отправьте PDF-файл чека.", keyboard([btn("← В меню", "back_to_menu")]))
         return
     await _process_payment_file(api, user_id, username, name, file_url, "pdf", caption)
 
@@ -550,8 +553,8 @@ async def _handle_link_phone_text(
     if not _is_valid_phone(text):
         await api.send_message(
             user_id,
-            "❌ Формат номера не распознан. Попробуйте ещё раз (например: +79001234567).\n"
-            "Или введите /skip, чтобы пропустить и перейти в меню.",
+            "❌ Формат номера не распознан. Попробуйте ещё раз (например: +79001234567).",
+            keyboard([btn("Пропустить →", "back_to_menu")]),
         )
         return
 
@@ -572,8 +575,8 @@ async def _handle_link_phone_text(
         "🔍 Телефон не найден в базе.\n\n"
         "Если у вас уже есть кабинет в Telegram-боте школы — "
         "откройте там раздел 👤 Личный кабинет и нажмите «🔗 Подключить MAX». "
-        "Вам придёт 6-значный код — введите его сюда.\n\n"
-        "Или введите /skip чтобы перейти в меню и оставить заявку.",
+        "Вам придёт 6-значный код — введите его сюда.",
+        keyboard([btn("Пропустить →", "back_to_menu")]),
     )
 
 
@@ -588,8 +591,8 @@ async def _handle_link_code(
     if not telegram_id:
         await api.send_message(
             user_id,
-            "❌ Код недействителен или устарел. Запросите новый код в Telegram-боте.\n"
-            "Или введите /skip чтобы перейти в меню.",
+            "❌ Код недействителен или устарел. Запросите новый код в Telegram-боте.",
+            keyboard([btn("Пропустить →", "back_to_menu")]),
         )
         return
 
@@ -620,6 +623,9 @@ async def _show_debt_payment_max(
     data: dict, direction_id: int, debt_lessons: int,
 ):
     """Show debt payment details screen for MAX."""
+    data["payment_type"] = "pay_debt"
+    data["payment_type_label"] = "💸 Погашение долга"
+    set_max_fsm_state(user_id, PAYMENT_PROOF, data)
     price_block = ""
     if LESSON_PRICE and debt_lessons > 0:
         base = LESSON_PRICE * debt_lessons
@@ -651,7 +657,7 @@ async def _process_payment_file(
         file_bytes = await api.download_bytes(file_url)
     except Exception as exc:
         logger.error("Failed to download file from MAX: %s", exc)
-        await api.send_message(user_id, "⚠️ Не удалось скачать файл. Попробуйте ещё раз.")
+        await api.send_message(user_id, "⚠️ Не удалось скачать файл. Попробуйте ещё раз.", keyboard([btn("← В меню", "back_to_menu")]))
         return
 
     try:
@@ -790,7 +796,7 @@ async def _dispatch_callback(
     if payload in ("user_student", "user_parent"):
         data["user_type"] = "Ученик" if payload == "user_student" else "Родитель"
         set_max_fsm_state(user_id, APP_NAME, data)
-        await _reply(api, user_id, message_id, "📝 Напишите, как к вам обращаться:")
+        await _reply(api, user_id, message_id, "📝 Напишите, как к вам обращаться:", back_kb())
         return
 
     if payload == "menu_cabinet":
@@ -800,6 +806,7 @@ async def _dispatch_callback(
                 api, user_id, message_id,
                 "❌ Мы пока не нашли вас в базе учеников.\n"
                 "Введите номер телефона для привязки или обратитесь к администратору.",
+                back_menu_kb(),
             )
             return
         student_id, student_name, telegram_id, _ = students[0]
@@ -812,7 +819,7 @@ async def _dispatch_callback(
     if payload == "enter_promo":
         students = find_students_by_max_id(user_id)
         if not students:
-            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе. Обратитесь к администратору.")
+            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе. Обратитесь к администратору.", back_menu_kb())
             return
         promo = get_active_promo_for_max_user(user_id)
         if promo:
@@ -826,7 +833,7 @@ async def _dispatch_callback(
             )
             return
         set_max_fsm_state(user_id, ENTER_PROMO, data)
-        await _reply(api, user_id, message_id, "🎟 Введите промокод:\n\nНапишите код в следующем сообщении.")
+        await _reply(api, user_id, message_id, "🎟 Введите промокод:\n\nНапишите код в следующем сообщении.", back_menu_kb())
         return
 
     if payload == "link_tg":
@@ -856,12 +863,12 @@ async def _dispatch_callback(
     if payload == "menu_paid":
         students = find_students_by_max_id(user_id)
         if not students:
-            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе.")
+            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе.", back_menu_kb())
             return
         student_id = students[0][0]
         directions = get_student_directions(student_id)
         if not directions:
-            await _reply(api, user_id, message_id, "❌ У вас нет направлений для оплаты.")
+            await _reply(api, user_id, message_id, "❌ У вас нет направлений для оплаты.", back_menu_kb())
             return
         debt_directions = [d for d in directions if d[3] < 0]
         if debt_directions:
@@ -870,7 +877,6 @@ async def _dispatch_callback(
                 d = debt_directions[0]
                 data["selected_direction_id"] = d[0]
                 data["skip_promo"] = False
-                set_max_fsm_state(user_id, PAYMENT_PROOF, data)
                 await _show_debt_payment_max(api, user_id, message_id, data, d[0], abs(d[3]))
             else:
                 data["selected_direction_id"] = None
@@ -919,7 +925,7 @@ async def _dispatch_callback(
     if payload in ("pay_debt", "pay_single"):
         students = find_students_by_max_id(user_id)
         if not students:
-            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе.")
+            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе.", back_menu_kb())
             return
         student_id = students[0][0]
         selected_direction_id = data.get("selected_direction_id")
@@ -969,7 +975,8 @@ async def _dispatch_callback(
             promo_block = f"\n🎟 Применён промокод {code} ({int(float(dvalue))}{unit})\n"
 
         active_promo = get_active_promo_for_max_user(user_id)
-        has_promo = bool(active_promo) and payload != "pay_debt"
+        # promo may have been set to None if it doesn't apply to this payment type
+        has_promo = bool(promo) and payload != "pay_debt"
         if has_promo and not skip_promo:
             payment_kb = keyboard(
                 [btn("🚫 Оплатить без промокода", "pay_skip_promo")],
@@ -1005,7 +1012,7 @@ async def _dispatch_callback(
         try:
             direction_id = int(payload.split("dir_", 1)[1])
         except (ValueError, IndexError):
-            await _reply(api, user_id, message_id, "Ошибка выбора направления.")
+            await _reply(api, user_id, message_id, "Ошибка выбора направления.", back_menu_kb())
             return
         data["selected_direction_id"] = direction_id
         data["skip_promo"] = False
@@ -1028,20 +1035,19 @@ async def _dispatch_callback(
         try:
             direction_id = int(payload.split("debt_dir_", 1)[1])
         except (ValueError, IndexError):
-            await _reply(api, user_id, message_id, "Ошибка выбора направления.")
+            await _reply(api, user_id, message_id, "Ошибка выбора направления.", back_menu_kb())
             return
         students = find_students_by_max_id(user_id)
         if not students:
-            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы.")
+            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы.", back_menu_kb())
             return
         directions = get_student_directions(students[0][0])
         debt_dir = next((d for d in directions if d[0] == direction_id and d[3] < 0), None)
         if not debt_dir:
-            await _reply(api, user_id, message_id, "❌ Направление не найдено или долга нет.")
+            await _reply(api, user_id, message_id, "❌ Направление не найдено или долга нет.", back_menu_kb())
             return
         data["selected_direction_id"] = direction_id
         data["skip_promo"] = False
-        set_max_fsm_state(user_id, PAYMENT_PROOF, data)
         await _show_debt_payment_max(api, user_id, message_id, data, direction_id, abs(debt_dir[3]))
         return
 
@@ -1056,7 +1062,7 @@ async def _dispatch_callback(
     if payload == "pay_package":
         students = find_students_by_max_id(user_id)
         if not students:
-            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе.")
+            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе.", back_menu_kb())
             return
         if not PACKAGE_PRICES:
             # No packages configured — treat as before
@@ -1095,15 +1101,15 @@ async def _dispatch_callback(
         try:
             lessons = int(payload.split("pay_package_", 1)[1])
         except (ValueError, IndexError):
-            await _reply(api, user_id, message_id, "Ошибка выбора пакета.")
+            await _reply(api, user_id, message_id, "Ошибка выбора пакета.", back_menu_kb())
             return
         price = PACKAGE_PRICES.get(lessons)
         if not price:
-            await _reply(api, user_id, message_id, "Пакет не найден.")
+            await _reply(api, user_id, message_id, "Пакет не найден.", back_menu_kb())
             return
         students = find_students_by_max_id(user_id)
         if not students:
-            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе.")
+            await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе.", back_menu_kb())
             return
         promo = get_active_promo_for_max_user(user_id)
         payment_type_label = f"📦 Пакет {lessons} занятий"
@@ -1495,6 +1501,7 @@ async def _handle_contact_value(
             await api.send_message(
                 user_id,
                 "❓ Введите Telegram @username — минимум 5 символов, начиная с @.",
+                back_kb(),
             )
             return
     else:
@@ -1502,6 +1509,7 @@ async def _handle_contact_value(
             await api.send_message(
                 user_id,
                 "❓ Формат номера не распознан. Попробуйте ещё раз (например: +79001234567).",
+                back_kb(),
             )
             return
     data["contact_value"] = text
@@ -1509,6 +1517,7 @@ async def _handle_contact_value(
     await api.send_message(
         user_id,
         "💬 Оставьте комментарий к заявке или напишите «-» чтобы пропустить:",
+        back_kb(),
     )
 
 
@@ -1517,7 +1526,7 @@ async def _handle_back(
 ) -> None:
     back_map = {
         APP_NAME:           (APP_USER_TYPE, "Пожалуйста, укажите: вы ученик или родитель?", user_type_kb()),
-        APP_CLASS:          (APP_NAME,      "📝 Напишите, как к вам обращаться:", None),
+        APP_CLASS:          (APP_NAME,      "📝 Напишите, как к вам обращаться:", back_kb()),
         APP_GOAL:           (APP_CLASS,     "🏫 Выберите класс:", class_kb()),
         APP_LESSON_TYPE:    (APP_GOAL,      "🎯 Выберите цель обучения:", goal_kb()),
         APP_SUBJECTS:       (APP_LESSON_TYPE, "📚 Выберите формат занятий:", lesson_type_kb()),
@@ -1546,6 +1555,7 @@ async def _submit_application(api: MaxApiClient, user_id: int, data: dict) -> No
         await api.send_message(
             user_id,
             "⚠️ Не удалось отправить заявку. Попробуйте ещё раз или свяжитесь с администратором.",
+            back_menu_kb(),
         )
         return
 

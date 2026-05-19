@@ -48,6 +48,7 @@ PAYMENT_BANK_NAME = os.getenv("SCHOOL_PAYMENT_BANK_NAME", "СБЕР")
 PAYMENT_ACCOUNT_HOLDER = os.getenv("SCHOOL_PAYMENT_ACCOUNT_HOLDER", "Александр Сергеевич К.")
 LESSON_PRICE = int(os.getenv("LESSON_PRICE", "0"))
 PACKAGE_PRICES: dict[int, int] = {}
+MAX_ADMIN_USERNAME = os.getenv("MAX_ADMIN_USERNAME", "")
 _raw_packages = os.getenv("PACKAGE_PRICES", "")
 for _item in _raw_packages.split(","):
     _item = _item.strip()

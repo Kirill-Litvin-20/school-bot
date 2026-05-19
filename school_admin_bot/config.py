@@ -3,7 +3,11 @@ from pathlib import Path
 
 
 def _load_env() -> None:
-    env_path = Path(__file__).resolve().parent.parent / ".env"
+    env_file_override = os.environ.get("ENV_FILE", "").strip()
+    if env_file_override:
+        env_path = Path(env_file_override)
+    else:
+        env_path = Path(__file__).resolve().parent.parent / ".env"
     if not env_path.exists():
         return
 
@@ -60,3 +64,4 @@ SCHOOL_BOT_TOKEN = os.getenv("SCHOOL_BOT_TOKEN", "").strip() or None
 SCHOOL_BOT_USERNAME = os.getenv("SCHOOL_BOT_USERNAME", "").strip().lstrip("@") or None
 SCHOOL_BOT_PAYMENTS_CHAT_ID = _parse_optional_int("SCHOOL_BOT_PAYMENTS_CHAT_ID")
 MAX_BOT_TOKEN = os.getenv("SCHOOL_MAX_BOT_TOKEN", "").strip() or None
+TEST_MODE: bool = os.getenv("TEST_MODE", "0").strip() == "1"

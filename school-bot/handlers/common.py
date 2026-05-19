@@ -241,6 +241,38 @@ def _format_attendance_status(status: str) -> str:
     }.get(status, status or "—")
 
 
+_MONTHS_SHORT = ["янв", "фев", "мар", "апр", "мая", "июн",
+                 "июл", "авг", "сен", "окт", "ноя", "дек"]
+
+
+def _fmt_short_date(date_str: str) -> str:
+    try:
+        y, m, d = date_str.split("-")
+        return f"{int(d)} {_MONTHS_SHORT[int(m) - 1]}"
+    except Exception:
+        return date_str or "—"
+
+
+def _fmt_short_datetime(datetime_str: str) -> str:
+    try:
+        date_part, time_part = datetime_str.split(" ", 1)
+        y, m, d = date_part.split("-")
+        hh, mm = time_part.split(":")[:2]
+        return f"{int(d)} {_MONTHS_SHORT[int(m) - 1]} {hh}:{mm}"
+    except Exception:
+        return _fmt_short_date(datetime_str[:10]) if datetime_str else "—"
+
+
+def _fmt_payment_status_short(status: str) -> str:
+    return {
+        "pending":    "⏳ ожидает",
+        "processing": "🔄 проверяется",
+        "approved":   "✅ принята",
+        "rejected":   "❌ отклонена",
+        "expired":    "⌛ просрочена",
+    }.get(status, status)
+
+
 def build_cabinet_text(
     student_name: str,
     directions: list[tuple],
@@ -293,22 +325,23 @@ def build_cabinet_text(
             lines.append("")
             lines.append("🗓 <b>Последние занятия</b>")
             for entry in recent:
-                date_view = (entry["lesson_date"] or "—")[:10]
+                date_view = _fmt_short_date((entry["lesson_date"] or "")[:10])
                 lines.append(
                     f"  • {date_view} — {entry['subject_name']}: "
                     f"{_format_attendance_status(entry['status'])}"
                 )
 
-    # --- Последние оплаты (до 2) ---
+    # --- Последние оплаты (до 4) ---
     if recent_payments:
         lines.append("")
         lines.append("💳 <b>Последние оплаты</b>")
-        for payment in recent_payments[:2]:
-            payment_id, status, _, created_at, _, lessons_added = payment
-            date_view = str(created_at)[:10] if created_at else "—"
-            status_label = format_payment_status(status)
-            lessons_str = f" (+{lessons_added} зан.)" if lessons_added else ""
-            lines.append(f"  • #{payment_id} {date_view}: {status_label}{lessons_str}")
+        for payment in recent_payments[:4]:
+            _, status, _, created_at, _, lessons_added = payment[:6]
+            source_platform = payment[6] if len(payment) > 6 else "telegram"
+            date_view = _fmt_short_datetime(str(created_at) if created_at else "")
+            status_label = _fmt_payment_status_short(status)
+            lessons_str = f" <b>+{lessons_added} зан.</b>" if lessons_added else ""
+            lines.append(f"  • {date_view} — {status_label}{lessons_str}")
 
     return "\n".join(lines)
 

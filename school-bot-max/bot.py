@@ -73,6 +73,7 @@ async def process_update(api: MaxApiClient, update: dict) -> None:
                     payload.get("url", ""),
                     payload.get("filename", ""),
                     text or None,
+                    mime_type=payload.get("mimeType") or payload.get("mime_type") or "",
                 )
             elif text:
                 await handle_text(api, user_id, username, name, text)

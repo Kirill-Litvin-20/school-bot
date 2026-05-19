@@ -80,6 +80,7 @@ from shared.database import (
     get_student_directions,
     get_student_lesson_by_id,
     mark_attendance,
+    has_recent_attendance,
     add_lessons_to_balance,
     get_balance_history_by_student,
     add_user,
@@ -2562,6 +2563,15 @@ async def mark_student_attendance(callback: CallbackQuery):
         return
 
     _, student_id, _, subject_name, lesson_balance_before, tariff_type, student_name, teacher_name = lesson
+
+    if status == "present" and has_recent_attendance(direction_id, within_minutes=5):
+        await callback.answer(
+            f"⚠️ Занятие уже отмечено менее 5 минут назад!\n"
+            f"Ученик: {student_name} — {subject_name}\n"
+            f"Повторное списание не выполнено.",
+            show_alert=True,
+        )
+        return
 
     await callback.answer()
 

@@ -60,3 +60,13 @@ class AdminStates(StatesGroup):
     waiting_promo_valid_until = State()
     waiting_promo_max_uses = State()
     waiting_promo_assign_student = State()
+
+
+class ScheduleStates(StatesGroup):
+    choosing_slot_type = State()         # recurring / one_time
+    choosing_direction = State()         # pick student_lesson_id
+    choosing_day_of_week = State()       # 0-6 for recurring
+    entering_specific_date = State()     # dd.mm.yyyy for one_time
+    entering_lesson_time = State()       # HH:MM
+    confirming_slot = State()            # show summary, confirm
+    choosing_slot_to_delete = State()    # pick slot to remove

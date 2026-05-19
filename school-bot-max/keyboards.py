@@ -15,6 +15,13 @@ sys.path.append(str(ROOT_DIR))
 
 from shared.max_api import btn, btn_url, keyboard
 from shared.database import get_teacher_catalog_subjects, get_teacher_catalog_name_subject_pairs
+from config import MAX_ADMIN_USERNAME
+
+
+def _admin_btn_rows() -> list[list[dict]]:
+    if MAX_ADMIN_USERNAME:
+        return [[btn_url("✉️ Написать администратору", f"https://max.ru/{MAX_ADMIN_USERNAME}")]]
+    return []
 
 SUBJECTS = [
     "Математика",
@@ -64,20 +71,24 @@ def cabinet_kb(tg_linked: bool = False) -> list[dict]:
 
 
 def faq_kb() -> list[dict]:
-    return keyboard(
+    rows = [
         [btn("💳 Как оплатить", "faq_pay")],
         [btn("📦 Что такое пакет занятий", "faq_package")],
         [btn("🔄 Перенос и отмена занятий", "faq_reschedule")],
         [btn("🎟 Промокоды", "faq_promo")],
+        *_admin_btn_rows(),
         [btn("← В меню", "back_to_menu")],
-    )
+    ]
+    return keyboard(*rows)
 
 
 def faq_back_kb() -> list[dict]:
-    return keyboard(
+    rows = [
         [btn("← К вопросам", "menu_faq")],
+        *_admin_btn_rows(),
         [btn("← В меню", "back_to_menu")],
-    )
+    ]
+    return keyboard(*rows)
 
 
 def back_kb() -> list[dict]:
@@ -206,6 +217,20 @@ def package_selection_kb(packages: dict, promo=None) -> list[dict]:
 
 def teacher_subjects_kb(subjects: list[str]) -> list[dict]:
     rows = [[btn(s, f"teacher_subject_{s}")] for s in subjects]
+    rows.append([btn("← В меню", "back_to_menu")])
+    return keyboard(*rows)
+
+
+def review_card_kb(index: int, total: int) -> list[dict]:
+    nav_row = []
+    if index > 0:
+        nav_row.append(btn("◀ Пред.", "review_prev"))
+    nav_row.append(btn(f"{index + 1} / {total}", "noop"))
+    if index < total - 1:
+        nav_row.append(btn("След. ▶", "review_next"))
+    rows = []
+    if len(nav_row) > 1:
+        rows.append(nav_row)
     rows.append([btn("← В меню", "back_to_menu")])
     return keyboard(*rows)
 
