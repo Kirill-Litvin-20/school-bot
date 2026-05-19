@@ -15,12 +15,14 @@ sys.path.append(str(ROOT_DIR))
 
 from shared.max_api import btn, btn_url, keyboard
 from shared.database import get_teacher_catalog_subjects, get_teacher_catalog_name_subject_pairs
-from config import MAX_ADMIN_USERNAME
+from config import MAX_ADMIN_USERNAME, MAX_ADMIN_TG_USERNAME
 
 
 def _admin_btn_rows() -> list[list[dict]]:
     if MAX_ADMIN_USERNAME:
         return [[btn_url("✉️ Написать администратору", f"https://max.ru/{MAX_ADMIN_USERNAME}")]]
+    if MAX_ADMIN_TG_USERNAME:
+        return [[btn_url("✉️ Написать администратору", f"https://t.me/{MAX_ADMIN_TG_USERNAME}")]]
     return []
 
 SUBJECTS = [
@@ -204,10 +206,10 @@ def package_selection_kb(packages: dict, promo=None) -> list[dict]:
     for lessons, price in sorted(packages.items()):
         if promo_dtype == "fixed_rub":
             discounted = max(0, price - int(promo_dvalue))
-            label = f"{lessons} зан. — {_fmt_price(discounted)}₽ (скидка {int(promo_dvalue)}₽)"
+            label = f"{lessons} зан. — {_strike(_fmt_price(price) + '₽')} → {_fmt_price(discounted)}₽"
         elif promo_dtype == "percent":
             discounted = int(price * (1 - promo_dvalue / 100))
-            label = f"{lessons} зан. — {_fmt_price(discounted)}₽ (скидка {int(promo_dvalue)}%)"
+            label = f"{lessons} зан. — {_strike(_fmt_price(price) + '₽')} → {_fmt_price(discounted)}₽"
         else:
             label = f"{lessons} зан. — {_fmt_price(price)}₽"
         rows.append([btn(label, f"pay_package_{lessons}")])
@@ -232,20 +234,6 @@ def review_card_kb(index: int, total: int) -> list[dict]:
 
 def teacher_subjects_kb(subjects: list[str]) -> list[dict]:
     rows = [[btn(s, f"teacher_subject_{s}")] for s in subjects]
-    rows.append([btn("← В меню", "back_to_menu")])
-    return keyboard(*rows)
-
-
-def review_card_kb(index: int, total: int) -> list[dict]:
-    nav_row = []
-    if index > 0:
-        nav_row.append(btn("◀ Пред.", "review_prev"))
-    nav_row.append(btn(f"{index + 1} / {total}", "noop"))
-    if index < total - 1:
-        nav_row.append(btn("След. ▶", "review_next"))
-    rows = []
-    if len(nav_row) > 1:
-        rows.append(nav_row)
     rows.append([btn("← В меню", "back_to_menu")])
     return keyboard(*rows)
 
