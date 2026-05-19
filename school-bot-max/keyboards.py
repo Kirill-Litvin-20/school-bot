@@ -60,6 +60,7 @@ def cabinet_kb(tg_linked: bool = False) -> list[dict]:
     rows = [
         [btn("💳 Оплатить занятия", "menu_paid")],
         [btn("🎟 Ввести промокод", "enter_promo")],
+        [btn("🎁 Реферальный код", "show_referral_code")],
         [btn_url("✉️ Написать администратору", "https://t.me/integral_school_ru")],
     ]
     if tg_linked:
@@ -203,15 +204,29 @@ def package_selection_kb(packages: dict, promo=None) -> list[dict]:
     for lessons, price in sorted(packages.items()):
         if promo_dtype == "fixed_rub":
             discounted = max(0, price - int(promo_dvalue))
-            label = f"{lessons} зан. — {_strike(_fmt_price(price) + '₽')} → {_fmt_price(discounted)}₽"
+            label = f"{lessons} зан. — {_fmt_price(discounted)}₽ (скидка {int(promo_dvalue)}₽)"
         elif promo_dtype == "percent":
             discounted = int(price * (1 - promo_dvalue / 100))
-            label = f"{lessons} зан. — {_strike(_fmt_price(price) + '₽')} → {_fmt_price(discounted)}₽"
+            label = f"{lessons} зан. — {_fmt_price(discounted)}₽ (скидка {int(promo_dvalue)}%)"
         else:
             label = f"{lessons} зан. — {_fmt_price(price)}₽"
         rows.append([btn(label, f"pay_package_{lessons}")])
 
     rows.append([btn("← Назад", "pay_back_to_type")])
+    return keyboard(*rows)
+
+
+def review_card_kb(index: int, total: int) -> list[dict]:
+    nav_row = []
+    if index > 0:
+        nav_row.append(btn("◀ Пред.", "review_prev"))
+    nav_row.append(btn(f"{index + 1} / {total}", "noop"))
+    if index < total - 1:
+        nav_row.append(btn("След. ▶", "review_next"))
+    rows = []
+    if len(nav_row) > 1:
+        rows.append(nav_row)
+    rows.append([btn("← В меню", "back_to_menu")])
     return keyboard(*rows)
 
 

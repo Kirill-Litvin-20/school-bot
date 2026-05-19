@@ -393,6 +393,62 @@ def get_student_disambiguation_keyboard(
             [InlineKeyboardButton(text=text[:64], callback_data=f"{action_prefix}_{student_id}")]
         )
     buttons.append([InlineKeyboardButton(text="Главное меню", callback_data="menu_home")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+_WEEKDAYS_FULL = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+_WEEKDAYS_SHORT = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+
+
+def get_schedule_main_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📅 Моё расписание", callback_data="schedule_view")],
+        [InlineKeyboardButton(text="➕ Добавить урок", callback_data="schedule_add")],
+        [InlineKeyboardButton(text="🗑 Удалить урок", callback_data="schedule_delete_menu")],
+        [InlineKeyboardButton(text="← Назад", callback_data="menu_home")],
+    ])
+
+
+def get_schedule_slot_type_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔁 Еженедельно", callback_data="schedule_type_recurring")],
+        [InlineKeyboardButton(text="📅 Разовый урок", callback_data="schedule_type_one_time")],
+        [InlineKeyboardButton(text="← Назад", callback_data="teacher_schedule")],
+    ])
+
+
+def get_schedule_direction_keyboard(directions: list):
+    rows = [
+        [InlineKeyboardButton(
+            text=f"{d['student_name']} — {d['subject_name']}"[:64],
+            callback_data=f"schedule_direction_{d['id']}",
+        )]
+        for d in directions
+    ]
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data="teacher_schedule")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_schedule_day_of_week_keyboard():
+    rows = [
+        [InlineKeyboardButton(text=day, callback_data=f"schedule_dow_{i}")]
+        for i, day in enumerate(_WEEKDAYS_SHORT)
+    ]
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data="teacher_schedule")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_schedule_delete_keyboard(slots: list):
+    rows = []
+    for s in slots:
+        if s.get("schedule_type") == "recurring":
+            when = f"каждый {_WEEKDAYS_FULL[s['day_of_week']]} в {s['lesson_time']}"
+        else:
+            when = f"{s.get('specific_date', '?')} в {s['lesson_time']}"
+        text = f"{s['student_name']} — {s['subject_name']} | {when}"
+        rows.append([InlineKeyboardButton(text=text[:64], callback_data=f"schedule_del_{s['id']}")])
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data="teacher_schedule")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def get_lessons_report_period_keyboard(back_callback: str = "superadmin_section_reports"):

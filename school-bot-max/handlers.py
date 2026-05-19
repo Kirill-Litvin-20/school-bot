@@ -13,6 +13,7 @@ import sys
 import time
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import quote
 from uuid import uuid4
 
 from aiogram import Bot as TelegramBot
@@ -68,8 +69,9 @@ from shared.database import (
     get_active_review_cards,
     get_max_fsm_state,
     get_recent_attendance_for_student,
-    get_recent_payment_history_by_max_user,
+    get_recent_payment_history_by_student_id,
     get_student_directions,
+    get_student_lesson_by_id,
     get_teacher_catalog_name_subject_pairs,
     link_max_to_student,
     set_max_fsm_state,
@@ -119,12 +121,34 @@ def _is_valid_tg_username(text: str) -> bool:
 
 def _format_payment_status(status: str) -> str:
     return {
-        "pending": "⏳ Ожидает проверки",
-        "processing": "🔄 На проверке",
-        "approved": "✅ Подтверждена",
-        "rejected": "❌ Отклонена",
-        "expired": "⌛ Просрочена",
+        "pending":    "⏳ ожидает",
+        "processing": "🔄 проверяется",
+        "approved":   "✅ принята",
+        "rejected":   "❌ отклонена",
+        "expired":    "⌛ просрочена",
     }.get(status, status)
+
+
+_MONTHS_SHORT = ["янв", "фев", "мар", "апр", "мая", "июн",
+                 "июл", "авг", "сен", "окт", "ноя", "дек"]
+
+
+def _fmt_short_date(date_str: str) -> str:
+    try:
+        y, m, d = date_str.split("-")
+        return f"{int(d)} {_MONTHS_SHORT[int(m) - 1]}"
+    except Exception:
+        return date_str or "—"
+
+
+def _fmt_short_datetime(datetime_str: str) -> str:
+    try:
+        date_part, time_part = datetime_str.split(" ", 1)
+        y, m, d = date_part.split("-")
+        hh, mm = time_part.split(":")[:2]
+        return f"{int(d)} {_MONTHS_SHORT[int(m) - 1]} {hh}:{mm}"
+    except Exception:
+        return _fmt_short_date(datetime_str[:10]) if datetime_str else "—"
 
 
 def _format_attendance_status(status: str) -> str:
@@ -178,7 +202,7 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
         if recent:
             lines.extend(["", "🗓 Последние занятия"])
             for entry in recent:
-                date_view = (entry["lesson_date"] or "—")[:10]
+                date_view = _fmt_short_date((entry["lesson_date"] or "")[:10])
                 lines.append(
                     f"  • {date_view} — {entry['subject_name']}: "
                     f"{_format_attendance_status(entry['status'])}"
@@ -459,13 +483,15 @@ async def handle_text(
             msg = f"❌ Срок действия промокода {code} истёк."
         elif result == "limit_reached":
             msg = f"❌ Промокод {code} исчерпал лимит использований."
+        elif result == "already_used":
+            msg = f"❌ Вы уже использовали промокод {code}."
         elif result == "already_assigned":
             msg = f"✅ Промокод {code} уже применён к вашему аккаунту."
         else:
             msg = "⚠️ Произошла ошибка. Попробуйте позже или обратитесь к администратору."
         set_max_fsm_state(user_id, MENU)
         from shared.max_api import btn as _btn, keyboard as _keyboard
-        kb = _keyboard([_btn("💳 Оплатить занятия", "menu_paid")], [_btn("← В меню", "back_to_menu")])
+        kb = _keyboard([_btn("💳 Оплатить занятия", "menu_paid")], [_btn("← В личный кабинет", "menu_cabinet")])
         await api.send_message(user_id, msg, kb)
 
     elif state == PAYMENT_PROOF:
@@ -506,6 +532,7 @@ async def handle_file(
     file_url: str,
     filename: str,
     caption: str | None,
+    mime_type: str = "",
 ) -> None:
     state, data = get_max_fsm_state(user_id)
     if state != PAYMENT_PROOF:
@@ -673,7 +700,8 @@ async def _process_payment_file(
 
         # Determine if promo was actually applied
         promo = get_active_promo_for_max_user(user_id)
-        promo_applied = promo if (promo and not skip_promo and payment_type != "pay_debt") else None
+        promo_applicable = fsm_data.get("promo_applicable", True)
+        promo_applied = promo if (promo and not skip_promo and payment_type != "pay_debt" and promo_applicable) else None
         promo_code_id_used = promo_applied[0] if promo_applied else None
 
         payment_request_id = create_payment_request_max(
@@ -691,14 +719,27 @@ async def _process_payment_file(
             _, code, dtype, dvalue, _ = promo_applied
             unit = "%" if dtype == "percent" else "₽"
             promo_line = f"\n🎟 Промокод: {code} (-{int(dvalue)}{unit})"
-        username_line = f"🔗 Username: @{username}" if username else "🔗 Username: не указан"
+
+        username_line = f"@{username}" if username else "не указан"
+
+        direction_line = ""
+        selected_dir_id = fsm_data.get("selected_direction_id")
+        if selected_dir_id:
+            dir_row = get_student_lesson_by_id(selected_dir_id)
+            if dir_row:
+                subject_name = dir_row[3]
+                teacher_name = dir_row[7]
+                direction_line = f"\n📚 Направление: {subject_name} — {teacher_name}"
+
         payment_caption = (
             f"💳 Оплата #{payment_request_id}\n\n"
             f"📌 Статус: ⏳ Ожидает проверки\n"
             f"📱 Платформа: MAX\n"
-            f"👤 Имя: {name}\n"
-            + username_line
+            f"👤 Имя (MAX): {name}\n"
+            f"🔗 Username: {username_line}\n"
+            f"🆔 MAX ID: {user_id}"
             + (f"\n💰 Тип оплаты: {payment_type_label}" if payment_type_label else "")
+            + direction_line
             + promo_line
         )
 
@@ -811,7 +852,7 @@ async def _dispatch_callback(
             return
         student_id, student_name, telegram_id, _ = students[0]
         directions = get_student_directions(student_id)
-        payments = get_recent_payment_history_by_max_user(user_id, limit=4)
+        payments = get_recent_payment_history_by_student_id(student_id, limit=4)
         text = _build_cabinet_text(student_name, directions, payments, student_id=student_id)
         await _reply(api, user_id, message_id, text, cabinet_kb(tg_linked=bool(telegram_id)))
         return
@@ -938,16 +979,18 @@ async def _dispatch_callback(
         promo = None if skip_promo else get_active_promo_for_max_user(user_id)
 
         price_block = ""
+        promo_not_applicable_note = ""
         if LESSON_PRICE:
             if payload == "pay_single":
                 dtype_p = dvalue_p = None
                 if promo:
-                    _, _, dtype_p, dvalue_p, atp = promo
+                    _, promo_code_str, dtype_p, dvalue_p, atp = promo
                     dvalue_p = float(dvalue_p)
                     applies_to_pkg = int(atp or 0) in (1, 2)
                     if applies_to_pkg:
                         promo = None  # package-only promo, don't apply to single
                         dtype_p = None
+                        promo_not_applicable_note = f"\n🎟 Промокод {promo_code_str} применяется только к пакетам занятий\n"
                 base = LESSON_PRICE
                 if dtype_p == "fixed_rub":
                     after = max(0, base - int(dvalue_p))
@@ -1002,6 +1045,7 @@ async def _dispatch_callback(
             f"🏢 Банк: {PAYMENT_BANK_NAME}\n"
             f"👤 Владелец: {PAYMENT_ACCOUNT_HOLDER}\n\n"
             "📝 В комментарии к переводу укажите имя ученика.\n"
+            f"{promo_not_applicable_note}"
             f"{promo_block}\n"
             "📸 После оплаты отправьте фото или PDF-файл чека в этот чат.",
             payment_kb,
@@ -1114,6 +1158,16 @@ async def _dispatch_callback(
         promo = get_active_promo_for_max_user(user_id)
         payment_type_label = f"📦 Пакет {lessons} занятий"
 
+        # Check if promo applies to packages
+        promo_not_applicable_note = ""
+        if promo:
+            _, _, _, _, applies_to_packages = promo
+            applies_to_pkg = int(applies_to_packages or 0) in (1, 2)
+            if not applies_to_pkg:
+                _, promo_code_str, _, _, _ = promo
+                promo_not_applicable_note = f"\n🎟 Промокод {promo_code_str} применяется только к разовым занятиям\n"
+                promo = None
+
         # Price calculation
         price_block = f"\n💵 Стоимость пакета: {price}₽\n"
         promo_block = ""
@@ -1131,7 +1185,21 @@ async def _dispatch_callback(
                 promo_block = f"\n🎟 Применён промокод {code} ({int(dvalue_f)}{unit})\n"
 
         data["payment_type_label"] = payment_type_label
+        data["promo_applicable"] = promo is not None
         set_max_fsm_state(user_id, PAYMENT_PROOF, data)
+        active_promo = get_active_promo_for_max_user(user_id)
+        if promo:
+            package_kb = keyboard(
+                [btn("🚫 Оплатить без промокода", "pay_skip_promo")],
+                [btn("← Назад", "pay_back_to_type")],
+            )
+        elif not active_promo or promo_not_applicable_note:
+            package_kb = keyboard(
+                [btn("🎟 Ввести промокод", "enter_promo")],
+                [btn("← Назад", "pay_back_to_type")],
+            )
+        else:
+            package_kb = keyboard([btn("← Назад", "pay_back_to_type")])
         await _reply(
             api, user_id, message_id,
             f"💰 Тип оплаты: {payment_type_label}"
@@ -1141,8 +1209,10 @@ async def _dispatch_callback(
             f"🏢 Банк: {PAYMENT_BANK_NAME}\n"
             f"👤 Владелец: {PAYMENT_ACCOUNT_HOLDER}\n\n"
             "📝 В комментарии к переводу укажите имя ученика.\n"
+            f"{promo_not_applicable_note}"
             f"{promo_block}\n"
             "📸 После оплаты отправьте фото или PDF-файл чека в этот чат.",
+            package_kb,
         )
         return
 
@@ -1233,29 +1303,58 @@ async def _dispatch_callback(
         await _reply(api, user_id, message_id, "🎁 СПЕЦИАЛЬНЫЕ ПРЕДЛОЖЕНИЯ\n\nВыберите предложение:", offers_kb())
         return
 
-    if payload in ("offer_free_diagnosis", "offer_first_package", "offer_referral_program"):
-        texts = {
-            "offer_free_diagnosis": (
-                "🎁 БЕСПЛАТНАЯ ДИАГНОСТИКА\n\n"
-                "Первое занятие для новых учеников — бесплатно!\n"
-                "Мы определим ваш уровень и подберём план обучения.\n\n"
-                "Оставьте заявку через 📝 Оставить заявку."
+    if payload == "offer_free_diagnosis":
+        await _reply(
+            api, user_id, message_id,
+            "🎁 БЕСПЛАТНАЯ ДИАГНОСТИКА\n\n"
+            "Первое занятие для новых учеников — бесплатно!\n\n"
+            "✅ Определим уровень знаний\n"
+            "✅ Подберём оптимальный план обучения\n"
+            "✅ Ответим на все вопросы\n\n"
+            "Оставьте заявку — мы свяжемся с вами.",
+            keyboard(
+                [btn("📝 Оставить заявку", "menu_signup")],
+                [btn("← Назад", "menu_offers")],
             ),
-            "offer_first_package": (
-                "💰 СКИДКА НА ПЕРВЫЙ ПАКЕТ\n\n"
-                "Скидка на первый пакет занятий для новых учеников.\n"
-                "Размер скидки уточняется при оформлении.\n\n"
-                "Оставьте заявку через 📝 Оставить заявку."
+        )
+        return
+
+    if payload == "offer_first_package":
+        await _reply(
+            api, user_id, message_id,
+            "💰 СКИДКА НА ПЕРВЫЙ ПАКЕТ\n\n"
+            "Выгодная скидка при оформлении первого пакета занятий для новых учеников.\n\n"
+            "✅ Только первый пакет\n"
+            "✅ Размер скидки уточняется при оформлении\n\n"
+            "Оставьте заявку — мы свяжемся с вами.",
+            keyboard(
+                [btn("📝 Оставить заявку", "menu_signup")],
+                [btn("← Назад", "menu_offers")],
             ),
-            "offer_referral_program": (
-                "🤝 РЕФЕРАЛЬНАЯ ПРОГРАММА\n\n"
-                "Пригласите друга — получите бонусное занятие!\n\n"
-                "Друг получает скидку 20% на первое занятие.\n"
-                "Вы получаете +1 занятие после его первой оплаты.\n\n"
-                "Реферальная ссылка доступна в Telegram-боте школы."
+        )
+        return
+
+    if payload == "offer_referral_program":
+        await _reply(
+            api, user_id, message_id,
+            "🤝 РЕФЕРАЛЬНАЯ ПРОГРАММА\n\n"
+            "Приглашайте друзей в школу и получайте бонусные занятия!\n\n"
+            "Что получает приглашённый:\n"
+            "✅ Бесплатную диагностику (1 занятие на балансе сразу при заведении).\n"
+            "✅ Скидку 20% на первое платное занятие после диагностики.\n\n"
+            "Что получаете вы:\n"
+            "✅ +1 бесплатное занятие после того, как приглашённый оплатит "
+            "своё первое занятие. Бонус автоматически списывается на ближайшем "
+            "проведённом занятии.\n\n"
+            "Где взять свою ссылку?\n"
+            "Откройте 👤 Личный кабинет → 🎁 Реферальный код. "
+            "Скопируйте ссылку и отправьте другу.\n\n"
+            "Уведомление о начисленном бонусе придёт автоматически в этот чат.",
+            keyboard(
+                [btn("🎁 Реферальный код", "show_referral_code")],
+                [btn("← Назад", "menu_offers")],
             ),
-        }
-        await _reply(api, user_id, message_id, texts[payload], back_menu_kb())
+        )
         return
 
     if payload == "menu_faq":
@@ -1391,9 +1490,13 @@ async def _dispatch_callback(
         method = payload.split("contact_", 1)[1]
         data["contact_method"] = method
         if method == "MAX":
-            data["contact_value"] = f"@{username}" if username else f"MAX:{user_id}"
-            set_max_fsm_state(user_id, APP_COMMENT, data)
-            await _reply(api, user_id, message_id, "💬 Оставьте комментарий или напишите «-» чтобы пропустить:")
+            if username:
+                data["contact_value"] = f"@{username}"
+                set_max_fsm_state(user_id, APP_COMMENT, data)
+                await _reply(api, user_id, message_id, "💬 Оставьте комментарий или напишите «-» чтобы пропустить:")
+            else:
+                set_max_fsm_state(user_id, APP_CONTACT_VALUE, data)
+                await _reply(api, user_id, message_id, "📞 У вас нет username в MAX. Введите номер телефона для связи (например: +79001234567):", back_kb())
         elif method == "Telegram":
             set_max_fsm_state(user_id, APP_CONTACT_VALUE, data)
             await _reply(api, user_id, message_id, "📱 Введите ваш Telegram @username (например: @username):", back_kb())
@@ -1470,17 +1573,30 @@ async def _dispatch_callback(
                 "Для получения реферальной ссылки сначала привяжите Telegram-аккаунт:\n"
                 "👤 Личный кабинет → 🔗 Связать с Telegram.\n\n"
                 "После привязки ссылка будет доступна здесь.",
-                back_menu_kb(),
+                keyboard(
+                    [btn("🔗 Связать с Telegram", "link_tg")],
+                    [btn("← В меню", "back_to_menu")],
+                ),
             )
             return
         tg_bot_username = TG_BOT_USERNAME or "integral_school_ru_bot"
         referral_link = f"https://t.me/{tg_bot_username}?start=ref_{telegram_id}"
+        share_text = "Привет! Я занимаюсь в школе Интеграл и советую попробовать 🎓 Переходи по моей ссылке — получишь скидку 20% на первое занятие!"
+        share_url = f"https://t.me/share/url?url={quote(referral_link, safe='')}&text={quote(share_text, safe='')}"
+        from shared.max_api import btn_url
         await _reply(
             api, user_id, message_id,
-            f"🎁 ВАШ РЕФЕРАЛЬНЫЙ КОД\n\n"
+            f"🎁 Ваша реферальная ссылка\n\n"
             f"{referral_link}\n\n"
-            "Друг переходит → диагностика → первая оплата со скидкой 20% → вам +1 занятие.",
-            back_menu_kb(),
+            "Поделитесь ссылкой с другом — и оба получите бонус:\n\n"
+            "👤 Друг — скидка 20% на первую оплату\n"
+            "🎓 Вы — +1 занятие в подарок\n\n"
+            "Схема простая:\n"
+            "Друг переходит → бесплатная диагностика → оплачивает занятие со скидкой → вы получаете бонус",
+            keyboard(
+                [btn_url("📤 Поделиться ссылкой", share_url)],
+                [btn("← В меню", "back_to_menu")],
+            ),
         )
         return
 
