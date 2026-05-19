@@ -1817,6 +1817,28 @@ def mark_attendance(direction_id: int, status: str, marked_by: int) -> int:
     return attendance_id
 
 
+
+
+def has_recent_attendance(direction_id: int, within_minutes: int = 5) -> bool:
+    """Return True if a present/completed attendance was recorded within the last N minutes."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT COUNT(*) FROM attendance
+        WHERE student_lesson_id = ?
+          AND status IN ('present', 'completed')
+          AND lesson_date >= ?
+        """,
+        (
+            direction_id,
+            (datetime.now() - timedelta(minutes=within_minutes)).strftime("%Y-%m-%d %H:%M:%S"),
+        ),
+    )
+    count = cur.fetchone()[0]
+    conn.close()
+    return count > 0
+
 def add_lessons_to_balance(direction_id: int, lessons_count: int, created_by: int | None = None, comment: str | None = None, amount_paid: int = 0):
     conn = get_connection()
     cur = conn.cursor()
@@ -1989,6 +2011,36 @@ def get_recent_payment_history_by_telegram_user(telegram_user_id: int, limit: in
     conn.close()
     return rows
 
+
+
+
+def get_recent_payment_history_by_student_id(student_id: int, limit: int = 4) -> list[tuple]:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            pr.id, pr.status, pr.caption_text, pr.created_at, pr.updated_at,
+            COALESCE(
+                (
+                    SELECT SUM(bh.lessons_delta)
+                    FROM balance_history bh
+                    WHERE bh.operation_type = 'manual_topup'
+                      AND COALESCE(bh.comment, '') LIKE '%#' || CAST(pr.id AS TEXT) || '%'
+                ),
+                0
+            ) AS lessons_added
+        FROM payment_requests pr
+        JOIN students s ON s.telegram_id = pr.telegram_user_id
+        WHERE s.id = ?
+        ORDER BY pr.id DESC
+        LIMIT ?
+        """,
+        (student_id, limit),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
 
 def update_payment_request_status(payment_request_id: int, status: str, admin_id: int | None = None):
     conn = get_connection()
