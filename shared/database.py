@@ -548,6 +548,21 @@ def init_db():
     )
     """)
 
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS schedule_slots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        direction_id INTEGER NOT NULL,
+        schedule_type TEXT NOT NULL,
+        day_of_week INTEGER,
+        specific_date TEXT,
+        lesson_time TEXT NOT NULL,
+        created_by BIGINT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(direction_id) REFERENCES student_lessons(id)
+    )
+    """)
+
     _ensure_postgres_bigint_columns(cur)
     _ensure_promo_codes_columns(cur)
     _cleanup_teacher_profiles_for_non_teacher_users(cur)
@@ -5649,3 +5664,182 @@ def get_revenue_by_period() -> dict:
         "weeks": weeks, "months": months,
         "total": total, "total_per_lesson": total_per_lesson, "total_package": total_package,
     }
+
+
+# ---------------------------------------------------------------------------
+# Schedule slots
+# ---------------------------------------------------------------------------
+
+def add_schedule_slot(direction_id: int, schedule_type: str, day_of_week, specific_date, lesson_time: str, created_by: int) -> int:
+    conn = get_connection()
+    cur = conn.cursor()
+    sql = _replace_qmark_placeholders(
+        "INSERT INTO schedule_slots (direction_id, schedule_type, day_of_week, specific_date, lesson_time, created_by, is_active, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, 1, ?)"
+    )
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    cur.execute(sql, (direction_id, schedule_type, day_of_week, specific_date, lesson_time, created_by, now))
+    conn.commit()
+    slot_id = cur.lastrowid
+    conn.close()
+    return slot_id or 0
+
+
+def get_teacher_schedule_slots(teacher_telegram_id: int) -> list:
+    conn = get_connection()
+    cur = conn.cursor()
+    sql = _replace_qmark_placeholders("""
+        SELECT ss.id, ss.schedule_type, ss.day_of_week, ss.lesson_time, ss.specific_date,
+               s.full_name AS student_name, subj.name AS subject_name
+        FROM schedule_slots ss
+        JOIN student_lessons sl ON sl.id = ss.direction_id
+        JOIN students s ON s.id = sl.student_id
+        JOIN teachers t ON t.id = sl.teacher_id
+        LEFT JOIN teacher_subjects subj ON subj.teacher_id = t.id AND subj.id = sl.teacher_subject_id
+        WHERE t.telegram_id = ? AND ss.is_active = 1
+        ORDER BY ss.day_of_week NULLS LAST, ss.lesson_time
+    """)
+    try:
+        cur.execute(sql, (teacher_telegram_id,))
+    except Exception:
+        sql2 = _replace_qmark_placeholders("""
+            SELECT ss.id, ss.schedule_type, ss.day_of_week, ss.lesson_time, ss.specific_date,
+                   s.full_name AS student_name, sl.subject_name AS subject_name
+            FROM schedule_slots ss
+            JOIN student_lessons sl ON sl.id = ss.direction_id
+            JOIN students s ON s.id = sl.student_id
+            JOIN teachers t ON t.id = sl.teacher_id
+            WHERE t.telegram_id = ? AND ss.is_active = 1
+            ORDER BY ss.day_of_week, ss.lesson_time
+        """)
+        cur.execute(sql2, (teacher_telegram_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {
+            "id": r[0],
+            "schedule_type": r[1],
+            "day_of_week": r[2],
+            "lesson_time": r[3],
+            "specific_date": r[4],
+            "student_name": r[5],
+            "subject_name": r[6],
+        }
+        for r in rows
+    ]
+
+
+def get_schedule_slot_by_id(slot_id: int) -> dict:
+    conn = get_connection()
+    cur = conn.cursor()
+    sql = _replace_qmark_placeholders(
+        "SELECT id, schedule_type, day_of_week, lesson_time, specific_date, direction_id, created_by, is_active "
+        "FROM schedule_slots WHERE id = ?"
+    )
+    cur.execute(sql, (slot_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return {}
+    return {
+        "id": row[0],
+        "schedule_type": row[1],
+        "day_of_week": row[2],
+        "lesson_time": row[3],
+        "specific_date": row[4],
+        "direction_id": row[5],
+        "created_by": row[6],
+        "is_active": row[7],
+    }
+
+
+def deactivate_schedule_slot(slot_id: int) -> None:
+    conn = get_connection()
+    cur = conn.cursor()
+    sql = _replace_qmark_placeholders(
+        "UPDATE schedule_slots SET is_active = 0 WHERE id = ?"
+    )
+    cur.execute(sql, (slot_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_teacher_directions_for_schedule(teacher_telegram_id: int) -> list:
+    conn = get_connection()
+    cur = conn.cursor()
+    sql = _replace_qmark_placeholders("""
+        SELECT sl.id, s.full_name AS student_name, sl.subject_name
+        FROM student_lessons sl
+        JOIN students s ON s.id = sl.student_id
+        JOIN teachers t ON t.id = sl.teacher_id
+        WHERE t.telegram_id = ? AND sl.is_active = 1
+        ORDER BY s.full_name
+    """)
+    try:
+        cur.execute(sql, (teacher_telegram_id,))
+        rows = cur.fetchall()
+    except Exception:
+        rows = []
+    conn.close()
+    return [{"id": r[0], "student_name": r[1], "subject_name": r[2]} for r in rows]
+
+
+def get_week_schedule_for_sheet(week_start: str, week_end: str) -> list:
+    """Return all active recurring/one_time slots that fall within [week_start, week_end].
+
+    week_start / week_end are ISO date strings 'YYYY-MM-DD'.
+    Returns list of dicts with keys:
+      lesson_date, lesson_time, teacher_name, student_name, subject_name, attendance_status
+    """
+    from datetime import date as date_cls, timedelta as td
+    try:
+        ws = date_cls.fromisoformat(week_start)
+        we = date_cls.fromisoformat(week_end)
+    except ValueError:
+        return []
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # Pull all active slots with teacher/student/subject info
+    sql = """
+        SELECT ss.id, ss.schedule_type, ss.day_of_week, ss.specific_date, ss.lesson_time,
+               t.full_name AS teacher_name, s.full_name AS student_name, sl.subject_name
+        FROM schedule_slots ss
+        JOIN student_lessons sl ON sl.id = ss.direction_id
+        JOIN students s ON s.id = sl.student_id
+        JOIN teachers t ON t.id = sl.teacher_id
+        WHERE ss.is_active = 1
+    """
+    cur.execute(sql)
+    slots = cur.fetchall()
+    conn.close()
+
+    results = []
+    current = ws
+    while current <= we:
+        dow = current.weekday()  # 0=Mon
+        for slot in slots:
+            _, stype, day_of_week, specific_date, lesson_time, teacher_name, student_name, subject_name = slot
+            match = False
+            if stype == "recurring" and day_of_week is not None and int(day_of_week) == dow:
+                match = True
+            elif stype == "one_time" and specific_date:
+                try:
+                    if date_cls.fromisoformat(specific_date) == current:
+                        match = True
+                except ValueError:
+                    pass
+            if match:
+                results.append({
+                    "lesson_date": current,
+                    "lesson_time": lesson_time or "",
+                    "teacher_name": teacher_name or "",
+                    "student_name": student_name or "",
+                    "subject_name": subject_name or "",
+                    "attendance_status": None,
+                })
+        current += td(days=1)
+
+    results.sort(key=lambda x: (x["lesson_date"], x["lesson_time"]))
+    return results
