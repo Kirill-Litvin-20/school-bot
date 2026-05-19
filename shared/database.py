@@ -4853,6 +4853,38 @@ def sheets_outbox_increment_attempts(outbox_id: int, error: str) -> None:
     conn.close()
 
 
+def sheets_outbox_get_dead() -> list[dict]:
+    """Вернуть записи, исчерпавшие все попытки (attempts >= 10)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, attendance_id, attempts, last_error, created_at
+        FROM sheets_outbox
+        WHERE attempts >= 10
+        ORDER BY id
+        """,
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {"outbox_id": r[0], "attendance_id": r[1], "attempts": r[2],
+         "last_error": r[3], "created_at": r[4]}
+        for r in rows
+    ]
+
+
+def sheets_outbox_delete_dead() -> int:
+    """Удалить все застрявшие записи (attempts >= 10). Вернуть количество удалённых."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM sheets_outbox WHERE attempts >= 10")
+    deleted = cur.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+
 # ---------------------------------------------------------------------------
 # Sheets summary data — Выплаты / Балансы / Статистика
 # ---------------------------------------------------------------------------

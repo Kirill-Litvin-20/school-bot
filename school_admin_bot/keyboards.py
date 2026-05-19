@@ -1,4 +1,11 @@
+import os
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+
+def _sheets_url() -> str | None:
+    sid = os.getenv("SHEETS_SPREADSHEET_ID", "").strip()
+    return f"https://docs.google.com/spreadsheets/d/{sid}" if sid else None
 
 
 def get_superadmin_menu():
@@ -47,12 +54,22 @@ def get_superadmin_school_menu():
 
 
 def get_superadmin_reports_menu():
+    sheets_url = _sheets_url()
+    sheets_row = [InlineKeyboardButton(text="🔄 Все листы", callback_data="sheets_refresh_all")]
+    if sheets_url:
+        sheets_row.append(InlineKeyboardButton(text="📂 Открыть таблицу", url=sheets_url))
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 Отчет по долгам", callback_data="admin_debt_report")],
             [InlineKeyboardButton(text="👨‍🏫 Занятия преподавателей", callback_data="admin_teacher_lessons_report")],
             [InlineKeyboardButton(text="📋 Журнал действий", callback_data="admin_actions_recent")],
-            [InlineKeyboardButton(text="🔄 Обновить таблицу", callback_data="sheets_refresh_all")],
+            sheets_row,
+            [
+                InlineKeyboardButton(text="💰 Балансы", callback_data="sheets_refresh_balances"),
+                InlineKeyboardButton(text="📆 Выплаты", callback_data="sheets_refresh_payouts"),
+                InlineKeyboardButton(text="📈 Статистика", callback_data="sheets_refresh_stats"),
+                InlineKeyboardButton(text="💵 Выручка", callback_data="sheets_refresh_revenue"),
+            ],
             [InlineKeyboardButton(text="← Назад", callback_data="superadmin_back_main")],
         ]
     )

@@ -60,6 +60,14 @@ def _rgb(c: dict) -> dict:
     return {"red": c["red"], "green": c["green"], "blue": c["blue"]}
 
 
+def _now_msk_str() -> str:
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        return datetime.now().strftime("%d.%m.%Y %H:%M")
+
+
 def _split_dt(dt_str: str) -> tuple[str, str, str]:
     """Split 'YYYY-MM-DD HH:MM:SS' → ('dd.mm.yyyy', 'HH:MM', 'Пн'/'Вт'/…)."""
     try:
@@ -78,14 +86,13 @@ class SheetsClient:
         self._lesson_price = int(os.getenv("LESSON_PRICE", "1500"))
         self._owner_cut = self._lesson_price - self._lesson_rate  # default 500
         self._gc = None
+        self._migration_done = False
 
     def is_configured(self) -> bool:
         return bool(self._spreadsheet_id and self._json_path and os.path.isfile(self._json_path))
 
     # ── Auth ───────────────────────────────────────────────────────────────────
-    def _get_client(self):
-        if self._gc is not None:
-            return self._gc
+    def _build_client(self):
         try:
             import gspread
             from google.oauth2.service_account import Credentials
@@ -97,12 +104,34 @@ class SheetsClient:
             "https://www.googleapis.com/auth/drive",
         ]
         creds = Credentials.from_service_account_file(self._json_path, scopes=scopes)
-        self._gc = gspread.authorize(creds)
+        return gspread.authorize(creds)
+
+    def _get_client(self, _retry: bool = True):
+        if self._gc is None:
+            self._gc = self._build_client()
         return self._gc
+
+    def _reset_client(self) -> None:
+        """Сбросить кешированный клиент — следующий вызов пересоздаст авторизацию."""
+        self._gc = None
 
     def _open_spreadsheet(self):
         gc = self._get_client()
-        return gc.open_by_key(self._spreadsheet_id) if gc else None
+        if gc is None:
+            return None
+        try:
+            return gc.open_by_key(self._spreadsheet_id)
+        except Exception as exc:
+            # Re-auth once on token expiry / transport errors
+            err = str(exc).lower()
+            if any(k in err for k in ("invalid_grant", "token", "401", "403", "unauthorized")):
+                logger.warning("Sheets: auth error, re-authenticating: %s", exc)
+                self._reset_client()
+                gc2 = self._get_client()
+                if gc2 is None:
+                    return None
+                return gc2.open_by_key(self._spreadsheet_id)
+            raise
 
     # ── Low-level helpers ──────────────────────────────────────────────────────
     def _get_or_add_worksheet(self, spreadsheet, title: str, rows: int = 5000, cols: int = 10):
@@ -112,9 +141,16 @@ class SheetsClient:
             return spreadsheet.add_worksheet(title=title, rows=rows, cols=cols)
 
     def _clear_data_rows(self, ws, cols: int = 26) -> None:
-        col_letter = chr(ord("A") + cols - 1)
+        def _col_letter(n: int) -> str:
+            """Convert 1-based column number to A1-notation letter(s)."""
+            result = ""
+            while n > 0:
+                n, rem = divmod(n - 1, 26)
+                result = chr(65 + rem) + result
+            return result
+
         try:
-            ws.batch_clear([f"A2:{col_letter}5000"])
+            ws.batch_clear([f"A2:{_col_letter(cols)}5000"])
         except Exception:
             pass
 
@@ -209,6 +245,9 @@ class SheetsClient:
 
     # ── Migration: rename «Посещения» → «Журнал» ──────────────────────────────
     def _migrate_sheet_names(self, spreadsheet) -> None:
+        if self._migration_done:
+            return
+        migrated = False
         for ws in spreadsheet.worksheets():
             if ws.title == "Посещения":
                 try:
@@ -219,8 +258,10 @@ class SheetsClient:
                         }
                     }]})
                     logger.info("Renamed sheet «Посещения» → «Журнал»")
+                    migrated = True
                 except Exception as exc:
                     logger.warning("Could not rename sheet: %s", exc)
+        self._migration_done = True  # Don't check again whether migration was needed or not
 
     # ── «Журнал» ──────────────────────────────────────────────────────────────
     def _get_or_create_journal(self, spreadsheet):
@@ -321,11 +362,10 @@ class SheetsClient:
     def append_attendance(self, row: dict[str, Any]) -> bool:
         if not self.is_configured():
             return False
-        gc = self._get_client()
-        if gc is None:
-            return False
         try:
-            sp = gc.open_by_key(self._spreadsheet_id)
+            sp = self._open_spreadsheet()
+            if sp is None:
+                return False
             ws = self._get_or_create_journal(sp)
             aid = row.get("attendance_id")
             if aid and self._find_journal_row_by_id(ws, aid):
@@ -342,10 +382,9 @@ class SheetsClient:
                           rebuild: bool = False) -> tuple[int, int]:
         if not self.is_configured() or not rows:
             return 0, 0
-        gc = self._get_client()
-        if gc is None:
+        sp = self._open_spreadsheet()
+        if sp is None:
             return 0, 0
-        sp = gc.open_by_key(self._spreadsheet_id)
         ws = self._get_or_create_journal(sp)
 
         if rebuild:
@@ -382,17 +421,20 @@ class SheetsClient:
         """Rewrite the «Выплаты» sheet from weekly payout data."""
         if not self.is_configured():
             return False
-        gc = self._get_client()
-        if gc is None:
-            return False
         try:
             from datetime import date as _date
-            sp = gc.open_by_key(self._spreadsheet_id)
+            sp = self._open_spreadsheet()
+            if sp is None:
+                return False
             ws = self._get_or_add_worksheet(sp, _PAYOUTS_SHEET, cols=5)
             self._clear_data_rows(ws, cols=5)
 
             rows_data: list[list] = []
             format_ranges: list[dict] = []
+
+            # "Обновлено" row — prepended so all format_ranges indices shift naturally
+            rows_data.append([f"Обновлено: {_now_msk_str()}", "", "", "", ""])
+            format_ranges.append({"type": "updated_row", "start": 2, "end": 3})
 
             for week_idx, week in enumerate(payouts):
                 w_start = week["week_start"]
@@ -490,6 +532,21 @@ class SheetsClient:
                 elif fr["type"] == "current_teachers":
                     requests.append(self._row_format_request(sheet_id, s, e, _C_YELLOW_ROW, num_cols=5))
 
+                elif fr["type"] == "updated_row":
+                    _C_UPDATED = {"red": 0.949, "green": 0.949, "blue": 0.949}
+                    requests.append({"repeatCell": {
+                        "range": {"sheetId": sheet_id,
+                                   "startRowIndex": s, "endRowIndex": e,
+                                   "startColumnIndex": 0, "endColumnIndex": 5},
+                        "cell": {"userEnteredFormat": {
+                            "backgroundColor": _rgb(_C_UPDATED),
+                            "textFormat": {"italic": True,
+                                           "foregroundColor": {"red": 0.5, "green": 0.5, "blue": 0.5},
+                                           "fontSize": 9},
+                        }},
+                        "fields": "userEnteredFormat(backgroundColor,textFormat)",
+                    }})
+
             self._batch_format(sp, requests)
             logger.info("Payouts sheet updated: %d weeks", len(payouts))
             return True
@@ -502,16 +559,26 @@ class SheetsClient:
         """Rewrite the «Балансы» sheet from student balance data."""
         if not self.is_configured():
             return False
-        gc = self._get_client()
-        if gc is None:
-            return False
         try:
-            sp = gc.open_by_key(self._spreadsheet_id)
+            sp = self._open_spreadsheet()
+            if sp is None:
+                return False
             ws = self._get_or_add_worksheet(sp, _BALANCES_SHEET, cols=5)
             self._clear_data_rows(ws, cols=5)
 
+            def _balance_sort_key(b: dict) -> tuple:
+                bal = b["lesson_balance"]
+                # 0=долг, 1=нет занятий, 2=мало, 3=ок — критичные наверху
+                if bal < 0:
+                    return (0, bal)
+                if bal == 0:
+                    return (1, 0)
+                if bal <= 2:
+                    return (2, bal)
+                return (3, bal)
+
             rows_data: list[list] = []
-            for b in balances:
+            for b in sorted(balances, key=_balance_sort_key):
                 bal = b["lesson_balance"]
                 if bal > 2:
                     status = "✅ Ок"
@@ -529,19 +596,32 @@ class SheetsClient:
             if not rows_data:
                 rows_data.append(["Нет данных", "", "", "", ""])
 
-            ws.update("A1", [_BALANCES_HEADER] + rows_data, value_input_option="USER_ENTERED")
+            updated_row = [f"Обновлено: {_now_msk_str()}", "", "", "", ""]
+            ws.update("A1", [_BALANCES_HEADER, updated_row] + rows_data, value_input_option="USER_ENTERED")
 
             sheet_id = ws.id
             n = len(_BALANCES_HEADER)
+            _C_UPDATED_ROW = {"red": 0.949, "green": 0.949, "blue": 0.949}
             requests = [
                 self._header_format_request(sheet_id, n, _C_BALANCES_HEADER),
-                self._freeze_request(sheet_id),
-                # balance > 2 → green
-                self._cond_formula_request(sheet_id, "=$D2>2",              _C_GREEN_ROW,  index=0, num_cols=n),
-                # balance 1–2 → orange/yellow
-                self._cond_formula_request(sheet_id, "=($D2>=1)*($D2<=2)",  _C_ORANGE_ROW, index=1, num_cols=n),
-                # balance <= 0 → red
-                self._cond_formula_request(sheet_id, "=$D2<=0",             _C_RED_ROW,    index=2, num_cols=n),
+                self._freeze_request(sheet_id, rows=2),
+                # "Обновлено" row (index 1) — subtle grey, italic
+                {"repeatCell": {
+                    "range": {"sheetId": sheet_id,
+                               "startRowIndex": 1, "endRowIndex": 2,
+                               "startColumnIndex": 0, "endColumnIndex": n},
+                    "cell": {"userEnteredFormat": {
+                        "backgroundColor": _rgb(_C_UPDATED_ROW),
+                        "textFormat": {"italic": True,
+                                       "foregroundColor": {"red": 0.5, "green": 0.5, "blue": 0.5},
+                                       "fontSize": 9},
+                    }},
+                    "fields": "userEnteredFormat(backgroundColor,textFormat)",
+                }},
+                # Data starts at row 3 (index 2), formulas reference $D3
+                self._cond_formula_request(sheet_id, "=$D3>2",              _C_GREEN_ROW,  index=0, num_cols=n, start_row=2),
+                self._cond_formula_request(sheet_id, "=($D3>=1)*($D3<=2)",  _C_ORANGE_ROW, index=1, num_cols=n, start_row=2),
+                self._cond_formula_request(sheet_id, "=$D3<=0",             _C_RED_ROW,    index=2, num_cols=n, start_row=2),
             ] + self._col_widths_request(sheet_id, [190, 170, 190, 80, 140])
             self._batch_format(sp, requests)
             logger.info("Balances sheet updated: %d rows", len(balances))
@@ -555,11 +635,10 @@ class SheetsClient:
         """Rewrite the «Статистика» sheet from stats data."""
         if not self.is_configured():
             return False
-        gc = self._get_client()
-        if gc is None:
-            return False
         try:
-            sp = gc.open_by_key(self._spreadsheet_id)
+            sp = self._open_spreadsheet()
+            if sp is None:
+                return False
             ws = self._get_or_add_worksheet(sp, _STATS_SHEET, cols=5)
             ws.clear()
 
@@ -658,12 +737,11 @@ class SheetsClient:
         """Rewrite the «Выручка» sheet with owner revenue breakdown."""
         if not self.is_configured():
             return False
-        gc = self._get_client()
-        if gc is None:
-            return False
         try:
             from datetime import datetime as _dt, timedelta as _td
-            sp = gc.open_by_key(self._spreadsheet_id)
+            sp = self._open_spreadsheet()
+            if sp is None:
+                return False
             ws = self._get_or_add_worksheet(sp, _REVENUE_SHEET, cols=6)
             ws.clear()
 
@@ -701,6 +779,10 @@ class SheetsClient:
 
             rows_data: list[list] = []
             format_requests_meta: list[dict] = []  # {type, row_1based}
+
+            # "Обновлено" row — prepended so all meta row indices shift naturally
+            rows_data.append([f"Обновлено: {_now_msk_str()}", "", "", "", "", ""])
+            format_requests_meta.append({"type": "updated_row", "row": len(rows_data)})
 
             # ── ЗАГОЛОВОК БЛОКА: ПО НЕДЕЛЯМ ───────────────────────────────
             rows_data.append(["📅 ПО НЕДЕЛЯМ", "", "", "", "", ""])
@@ -773,10 +855,24 @@ class SheetsClient:
                 self._freeze_request(sheet_id),
             ] + self._col_widths_request(sheet_id, [160, 220, 80, 185, 175, 185])
 
+            _C_UPDATED = {"red": 0.949, "green": 0.949, "blue": 0.949}
+
             for meta in format_requests_meta:
                 r = meta["row"]   # 1-based data row → 0-based sheet row = r (header is row 0)
                 t = meta["type"]
-                if t == "section":
+                if t == "updated_row":
+                    requests.append({"repeatCell": {
+                        "range": {"sheetId": sheet_id, "startRowIndex": r, "endRowIndex": r + 1,
+                                   "startColumnIndex": 0, "endColumnIndex": 6},
+                        "cell": {"userEnteredFormat": {
+                            "backgroundColor": _rgb(_C_UPDATED),
+                            "textFormat": {"italic": True,
+                                           "foregroundColor": {"red": 0.5, "green": 0.5, "blue": 0.5},
+                                           "fontSize": 9},
+                        }},
+                        "fields": "userEnteredFormat(backgroundColor,textFormat)",
+                    }})
+                elif t == "section":
                     requests.append({
                         "repeatCell": {
                             "range": {"sheetId": sheet_id, "startRowIndex": r, "endRowIndex": r + 1,
@@ -796,10 +892,11 @@ class SheetsClient:
                     bold = t in ("week_current", "month_current", "total")
                     requests.append(self._row_format_request(sheet_id, r, r + 1, color, bold=bold, num_cols=6))
 
-            # Right-align numbers (cols C–F = indices 2–5)
+            # Right-align numbers (cols C–F = indices 2–5), dynamic end row
+            end_row = len(rows_data) + 2
             requests.append({
                 "repeatCell": {
-                    "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": 200,
+                    "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": end_row,
                               "startColumnIndex": 2, "endColumnIndex": 6},
                     "cell": {"userEnteredFormat": {"horizontalAlignment": "RIGHT"}},
                     "fields": "userEnteredFormat(horizontalAlignment)",
@@ -816,15 +913,13 @@ class SheetsClient:
     def mark_cancelled(self, attendance_id: int, cancelled_by: str, lesson_datetime: str) -> bool:
         if not self.is_configured():
             return False
-        gc = self._get_client()
-        if gc is None:
-            return False
         try:
-            sp = gc.open_by_key(self._spreadsheet_id)
+            sp = self._open_spreadsheet()
+            if sp is None:
+                return False
             ws = self._get_or_create_journal(sp)
-            now = datetime.now()
-            date_s, time_s, day_s = now.strftime("%d.%m.%Y"), now.strftime("%H:%M"), _WEEKDAYS_SHORT[now.weekday()]
-            ws.insert_rows([[date_s, time_s, day_s, "", "", "", "", "↩️ Отменено", "", "", cancelled_by, str(attendance_id)]],
+            date_s, time_s, day_s = _split_dt(lesson_datetime)
+            ws.insert_rows([[date_s, time_s, day_s, "", "", "", "", "Отменено", "", "", cancelled_by, str(attendance_id)]],
                            row=2, value_input_option="USER_ENTERED")
             return True
         except Exception as exc:

@@ -33,6 +33,7 @@ from shared.database import (
     sheets_outbox_pop_pending,
     sheets_outbox_delete,
     sheets_outbox_increment_attempts,
+    sheets_outbox_get_dead,
     get_weekly_payouts,
     get_all_student_balances,
     get_attendance_stats,
@@ -372,6 +373,8 @@ async def sheets_outbox_worker():
     """Retry attendance rows that failed to reach Google Sheets."""
     logger = logging.getLogger(__name__)
     client = get_sheets_client()
+    _dead_notified_at: float = 0.0
+
     while True:
         try:
             if client.is_configured():
@@ -394,6 +397,28 @@ async def sheets_outbox_worker():
                             "Sheets outbox retry failed for attendance_id=%s: %s",
                             item["attendance_id"], exc,
                         )
+
+                # Notify admins about dead entries (rate-limited to once per hour)
+                import time as _time
+                if _time.monotonic() - _dead_notified_at >= 3600:
+                    dead = await asyncio.to_thread(sheets_outbox_get_dead)
+                    if dead:
+                        _dead_notified_at = _time.monotonic()
+                        ids = ", ".join(str(d["attendance_id"]) for d in dead[:10])
+                        extra = f" и ещё {len(dead) - 10}" if len(dead) > 10 else ""
+                        text = (
+                            f"⚠️ <b>Sheets: {len(dead)} записей застряли</b>\n"
+                            f"Исчерпаны все 10 попыток записи в Журнал.\n"
+                            f"attendance_id: {ids}{extra}\n\n"
+                            f"Последняя ошибка: <code>{dead[0]['last_error'] or '—'}</code>\n"
+                            f"Для очистки: <code>/sheets_clear_dead</code>"
+                        )
+                        recipients = sorted(set(list(SUPERADMINS) + get_active_admin_telegram_ids()))
+                        for uid in recipients:
+                            try:
+                                await bot.send_message(uid, text, parse_mode="HTML")
+                            except Exception:
+                                pass
         except Exception as exc:
             logger.exception("Sheets outbox worker error: %s", exc)
         await asyncio.sleep(60)
