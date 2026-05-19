@@ -68,7 +68,10 @@ def get_superadmin_reports_menu():
                 InlineKeyboardButton(text="💰 Балансы", callback_data="sheets_refresh_balances"),
                 InlineKeyboardButton(text="📆 Выплаты", callback_data="sheets_refresh_payouts"),
                 InlineKeyboardButton(text="📈 Статистика", callback_data="sheets_refresh_stats"),
+            ],
+            [
                 InlineKeyboardButton(text="💵 Выручка", callback_data="sheets_refresh_revenue"),
+                InlineKeyboardButton(text="💳 Пополнения", callback_data="sheets_refresh_topups"),
             ],
             [InlineKeyboardButton(text="← Назад", callback_data="superadmin_back_main")],
         ]

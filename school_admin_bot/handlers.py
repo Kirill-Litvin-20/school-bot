@@ -150,6 +150,7 @@ from shared.database import (
     get_all_student_balances,
     get_attendance_stats,
     get_revenue_by_period,
+    get_topups_history,
 )
 
 router = Router()
@@ -178,6 +179,7 @@ async def _update_summary_sheets_bg() -> None:
             (get_all_student_balances, client.update_balances_sheet, "Балансы"),
             (get_attendance_stats,     client.update_stats_sheet,    "Статистика"),
             (get_revenue_by_period,    client.update_revenue_sheet,  "Выручка"),
+            (get_topups_history,       client.update_topups_sheet,   "Пополнения"),
         ]:
             try:
                 data = await asyncio.to_thread(fetch_fn)
@@ -3199,6 +3201,7 @@ async def _do_sheets_refresh(message) -> None:
             (get_all_student_balances, client.update_balances_sheet, "Балансы"),
             (get_attendance_stats,     client.update_stats_sheet,    "Статистика"),
             (get_revenue_by_period,    client.update_revenue_sheet,  "Выручка"),
+            (get_topups_history,       client.update_topups_sheet,   "Пополнения"),
         ]:
             try:
                 data = await asyncio.to_thread(fetch_fn)
@@ -3218,6 +3221,7 @@ _SHEET_TARGETS = {
     "sheets_refresh_payouts":  (get_weekly_payouts,       "update_payouts_sheet",  "Выплаты"),
     "sheets_refresh_stats":    (get_attendance_stats,     "update_stats_sheet",    "Статистика"),
     "sheets_refresh_revenue":  (get_revenue_by_period,    "update_revenue_sheet",  "Выручка"),
+    "sheets_refresh_topups":   (get_topups_history,       "update_topups_sheet",   "Пополнения"),
 }
 
 

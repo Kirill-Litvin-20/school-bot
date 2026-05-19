@@ -5629,3 +5629,75 @@ def get_revenue_by_period() -> dict:
         "weeks": weeks, "months": months,
         "total": total, "total_per_lesson": total_per_lesson, "total_package": total_package,
     }
+
+
+# ---------------------------------------------------------------------------
+# Пополнения баланса — для листа «Пополнения» в Google Sheets
+# ---------------------------------------------------------------------------
+
+def get_topups_history() -> dict:
+    """Вернуть историю пополнений балансов для листа «Пополнения».
+
+    Включает manual_topup и initial_balance (lessons_delta > 0).
+    Возвращает dict с rows (список операций) и агрегатами.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT
+            bh.created_at,
+            s.full_name      AS student_name,
+            sl.subject_name,
+            t.full_name      AS teacher_name,
+            bh.lessons_delta,
+            bh.operation_type,
+            bh.comment,
+            COALESCE(u.full_name, '') AS created_by_name
+        FROM balance_history bh
+        JOIN student_lessons sl ON bh.student_lesson_id = sl.id
+        JOIN students s         ON sl.student_id = s.id
+        JOIN teachers t         ON sl.teacher_id = t.id
+        LEFT JOIN users u       ON u.telegram_id = bh.created_by
+        WHERE bh.operation_type IN ('manual_topup', 'initial_balance')
+          AND bh.lessons_delta > 0
+        ORDER BY bh.id DESC
+        """
+    )
+    rows = [
+        {
+            "created_at":      r[0],
+            "student_name":    r[1],
+            "subject_name":    r[2],
+            "teacher_name":    r[3],
+            "lessons_delta":   r[4],
+            "operation_type":  r[5],
+            "comment":         r[6] or "",
+            "created_by_name": r[7],
+        }
+        for r in cur.fetchall()
+    ]
+
+    # Aggregates
+    from datetime import date as _date, timedelta as _td
+    today = _date.today()
+    week_start = today - _td(days=today.weekday())
+    month_start = today.replace(day=1)
+
+    total_lessons = sum(r["lessons_delta"] for r in rows)
+    week_lessons  = sum(r["lessons_delta"] for r in rows
+                        if r["created_at"][:10] >= week_start.isoformat())
+    month_lessons = sum(r["lessons_delta"] for r in rows
+                        if r["created_at"][:10] >= month_start.isoformat())
+    today_lessons = sum(r["lessons_delta"] for r in rows
+                        if r["created_at"][:10] == today.isoformat())
+
+    conn.close()
+    return {
+        "rows": rows,
+        "total_lessons":  total_lessons,
+        "week_lessons":   week_lessons,
+        "month_lessons":  month_lessons,
+        "today_lessons":  today_lessons,
+    }

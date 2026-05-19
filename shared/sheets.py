@@ -38,6 +38,11 @@ _REVENUE_SHEET  = "Выручка"
 _REVENUE_HEADER = ["Период", "Тип", "Занятий", "Выручка (1500₽)", "Хозяину (500₽)", "Преподам (1000₽)"]
 _C_REVENUE_HEADER = {"red": 0.027, "green": 0.408, "blue": 0.392}  # dark teal
 
+_TOPUPS_SHEET  = "Пополнения"
+_TOPUPS_HEADER = ["Дата", "Время", "День", "Ученик", "Направление", "Препод",
+                  "+Занятий", "Сумма (₽)", "Тип", "Кто добавил", "Комментарий"]
+_C_TOPUPS_HEADER = {"red": 0.180, "green": 0.216, "blue": 0.451}   # dark indigo
+
 # ── Display maps ───────────────────────────────────────────────────────────────
 _STATUS_LABELS = {"present": "Был", "absent": "Не был", "cancelled": "Отменено"}
 _TARIFF_LABELS = {"package": "Пакет", "per_lesson": "Поурочно", "subscription": "Абонемент"}
@@ -924,6 +929,188 @@ class SheetsClient:
             return True
         except Exception as exc:
             logger.error("Sheets cancel failed: %s", exc)
+            return False
+
+    # ── «Пополнения» ──────────────────────────────────────────────────────────
+    def update_topups_sheet(self, data: dict) -> bool:
+        """Rewrite the «Пополнения» sheet with balance top-up history."""
+        if not self.is_configured():
+            return False
+        try:
+            sp = self._open_spreadsheet()
+            if sp is None:
+                return False
+
+            ws = self._get_or_add_worksheet(sp, _TOPUPS_SHEET,
+                                            rows=5000, cols=len(_TOPUPS_HEADER))
+            ws.clear()
+
+            price = self._lesson_price
+            n = len(_TOPUPS_HEADER)  # 11
+
+            _OP_LABELS = {
+                "manual_topup":    "Пополнение",
+                "initial_balance": "Стартовый",
+            }
+            _C_TOPUP_ROW    = {"red": 0.851, "green": 0.937, "blue": 0.855}   # нежно-зелёный
+            _C_INITIAL_ROW  = {"red": 0.827, "green": 0.882, "blue": 0.949}   # нежно-синий
+            _C_SUMMARY_BG   = {"red": 0.255, "green": 0.302, "blue": 0.502}   # тёмно-индиго (как шапка)
+            _C_SUMMARY_DATA = {"red": 0.988, "green": 0.918, "blue": 0.737}   # золотистый
+            _C_UPDATED_ROW  = {"red": 0.949, "green": 0.949, "blue": 0.949}
+
+            def _rub(n_lessons: int) -> str:
+                return f"{n_lessons * price:,}".replace(",", " ") + " ₽"
+
+            rows_data: list[list] = []
+            format_meta: list[dict] = []  # {type, row_1based}
+
+            # ── Строка «Обновлено» ──────────────────────────────────────────
+            rows_data.append([f"Обновлено: {_now_msk_str()}", *[""] * (n - 1)])
+            format_meta.append({"type": "updated", "row": len(rows_data)})
+
+            # ── Сводный блок ────────────────────────────────────────────────
+            rows_data.append(["📊 ИТОГИ ПОПОЛНЕНИЙ", *[""] * (n - 1)])
+            format_meta.append({"type": "summary_header", "row": len(rows_data)})
+
+            total   = data.get("total_lessons",  0)
+            month   = data.get("month_lessons",  0)
+            week    = data.get("week_lessons",   0)
+            today_l = data.get("today_lessons",  0)
+            for label, val in [
+                ("Всего занятий добавлено",   total),
+                ("За этот месяц",              month),
+                ("За эту неделю",              week),
+                ("Сегодня",                    today_l),
+            ]:
+                rows_data.append([label, val, "", _rub(val), *[""] * (n - 4)])
+                format_meta.append({"type": "summary_data", "row": len(rows_data)})
+
+            # ── Разделитель ─────────────────────────────────────────────────
+            rows_data.append([""] * n)
+
+            # ── Строка-подзаголовок перед данными ───────────────────────────
+            rows_data.append(["▸ Все пополнения (новые сверху)", *[""] * (n - 1)])
+            format_meta.append({"type": "data_header", "row": len(rows_data)})
+
+            # ── Данные ──────────────────────────────────────────────────────
+            for row in data.get("rows", []):
+                date_s, time_s, day_s = _split_dt(row["created_at"])
+                op_label = _OP_LABELS.get(row["operation_type"], row["operation_type"])
+                lessons  = row["lessons_delta"]
+                amount   = f"{lessons * price:,}".replace(",", " ") + " ₽"
+                rows_data.append([
+                    date_s, time_s, day_s,
+                    row["student_name"],
+                    row["subject_name"],
+                    row["teacher_name"],
+                    lessons,
+                    amount,
+                    op_label,
+                    row["created_by_name"],
+                    row["comment"],
+                ])
+                format_meta.append({
+                    "type": "topup" if row["operation_type"] == "manual_topup" else "initial",
+                    "row": len(rows_data),
+                })
+
+            if not data.get("rows"):
+                rows_data.append(["Нет данных", *[""] * (n - 1)])
+
+            header = list(_TOPUPS_HEADER)
+            header[7] = f"Сумма ({price} ₽/зан.)"
+            ws.update("A1", [header] + rows_data, value_input_option="USER_ENTERED")
+
+            sheet_id = ws.id
+            _C_DATA_HEADER = {"red": 0.831, "green": 0.871, "blue": 0.980}  # light lavender
+
+            requests = [
+                self._header_format_request(sheet_id, n, _C_TOPUPS_HEADER),
+                self._freeze_request(sheet_id, rows=2),
+            ] + self._col_widths_request(sheet_id, [90, 60, 40, 170, 150, 150, 70, 130, 100, 150, 200])
+
+            for meta in format_meta:
+                r = meta["row"]   # 1-based data row → 0-based sheet row = r (header=row0)
+                t = meta["type"]
+
+                if t == "updated":
+                    requests.append({"repeatCell": {
+                        "range": {"sheetId": sheet_id, "startRowIndex": r, "endRowIndex": r + 1,
+                                   "startColumnIndex": 0, "endColumnIndex": n},
+                        "cell": {"userEnteredFormat": {
+                            "backgroundColor": _rgb(_C_UPDATED_ROW),
+                            "textFormat": {"italic": True,
+                                           "foregroundColor": {"red": 0.5, "green": 0.5, "blue": 0.5},
+                                           "fontSize": 9},
+                        }},
+                        "fields": "userEnteredFormat(backgroundColor,textFormat)",
+                    }})
+
+                elif t == "summary_header":
+                    requests.append({"repeatCell": {
+                        "range": {"sheetId": sheet_id, "startRowIndex": r, "endRowIndex": r + 1,
+                                   "startColumnIndex": 0, "endColumnIndex": n},
+                        "cell": {"userEnteredFormat": {
+                            "backgroundColor": _rgb(_C_SUMMARY_BG),
+                            "textFormat": {"foregroundColor": _C_WHITE, "bold": True, "fontSize": 10},
+                            "horizontalAlignment": "LEFT",
+                        }},
+                        "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+                    }})
+                    requests.append({"updateDimensionProperties": {
+                        "range": {"sheetId": sheet_id, "dimension": "ROWS",
+                                   "startIndex": r, "endIndex": r + 1},
+                        "properties": {"pixelSize": 28}, "fields": "pixelSize",
+                    }})
+
+                elif t == "summary_data":
+                    requests.append({"repeatCell": {
+                        "range": {"sheetId": sheet_id, "startRowIndex": r, "endRowIndex": r + 1,
+                                   "startColumnIndex": 0, "endColumnIndex": 4},
+                        "cell": {"userEnteredFormat": {
+                            "backgroundColor": _rgb(_C_SUMMARY_DATA),
+                            "textFormat": {"bold": False},
+                        }},
+                        "fields": "userEnteredFormat(backgroundColor,textFormat)",
+                    }})
+                    # Right-align the number and amount columns
+                    requests.append({"repeatCell": {
+                        "range": {"sheetId": sheet_id, "startRowIndex": r, "endRowIndex": r + 1,
+                                   "startColumnIndex": 1, "endColumnIndex": 4},
+                        "cell": {"userEnteredFormat": {"horizontalAlignment": "RIGHT"}},
+                        "fields": "userEnteredFormat(horizontalAlignment)",
+                    }})
+
+                elif t == "data_header":
+                    requests.append({"repeatCell": {
+                        "range": {"sheetId": sheet_id, "startRowIndex": r, "endRowIndex": r + 1,
+                                   "startColumnIndex": 0, "endColumnIndex": n},
+                        "cell": {"userEnteredFormat": {
+                            "backgroundColor": _rgb(_C_DATA_HEADER),
+                            "textFormat": {"bold": True, "fontSize": 9},
+                        }},
+                        "fields": "userEnteredFormat(backgroundColor,textFormat)",
+                    }})
+
+                elif t in ("topup", "initial"):
+                    color = _C_TOPUP_ROW if t == "topup" else _C_INITIAL_ROW
+                    requests.append(self._row_format_request(sheet_id, r, r + 1, color, num_cols=n))
+
+            # Right-align +Занятий и Сумма (cols G=6, H=7, 0-based)
+            data_start = next((m["row"] for m in format_meta if m["type"] == "data_header"), 7) + 1
+            requests.append({"repeatCell": {
+                "range": {"sheetId": sheet_id,
+                           "startRowIndex": data_start, "endRowIndex": len(rows_data) + 2,
+                           "startColumnIndex": 6, "endColumnIndex": 8},
+                "cell": {"userEnteredFormat": {"horizontalAlignment": "RIGHT"}},
+                "fields": "userEnteredFormat(horizontalAlignment)",
+            }})
+
+            self._batch_format(sp, requests)
+            logger.info("Sheets: Пополнения updated (%d rows)", len(data.get("rows", [])))
+            return True
+        except Exception as exc:
+            logger.error("update_topups_sheet failed: %s", exc)
             return False
 
 
