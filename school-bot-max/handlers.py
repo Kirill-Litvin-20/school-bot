@@ -211,7 +211,7 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
     lines.extend(["", "💳 Оплаты"])
     if payments:
         for p in payments[:4]:
-            pid, status, caption, created_at, _, lessons = p
+            pid, status, caption, created_at, _, lessons, *_ = p
             date_view = str(created_at)[:10] if created_at else "—"
             lessons_str = f" (+{lessons} зан.)" if lessons else ""
             lines.append(f"  • #{pid} {date_view}: {_format_payment_status(status)}{lessons_str}")
