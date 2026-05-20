@@ -793,6 +793,7 @@ async def approve_payment_request(callback: CallbackQuery):
         _created_at,
         _updated_at,
         preferred_direction_id,
+        *_,
     ) = payment
 
     if status == "approved":
