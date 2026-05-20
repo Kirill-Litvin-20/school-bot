@@ -1,7 +1,7 @@
 """MAX bot handlers.
 
 The dispatcher calls these functions with parsed update data. All state is
-kept in the shared SQLite `max_fsm_state` table so the MAX bot has no
+kept in the shared `max_fsm_state` table (PostgreSQL) so the MAX bot has no
 dependency on aiogram's FSM infrastructure.
 """
 

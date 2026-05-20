@@ -15,49 +15,14 @@ except ImportError:  # pragma: no cover - optional dependency
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 
-def _replace_qmark_placeholders(sql: str) -> str:
-    """Convert SQLite-style ? placeholders to psycopg2-style %s.
+def _prepare_sql(sql: str) -> str:
+    """Normalise a SQL string for psycopg2.
 
-    Also escapes literal % characters (e.g. inside LIKE '...%...') as %%
-    so psycopg2 does not misinterpret them as parameter markers.
+    Replaces ? parameter markers with %s and escapes literal % inside string
+    literals as %% so psycopg2 does not misinterpret them as parameter markers.
+    Also converts legacy CREATE TABLE and INSERT syntax to PostgreSQL equivalents.
     """
-    result: list[str] = []
-    in_single_quote = False
-    in_double_quote = False
-    escaped = False
-
-    for ch in sql:
-        if ch == "\\" and not escaped:
-            escaped = True
-            result.append(ch)
-            continue
-
-        if ch == "'" and not in_double_quote and not escaped:
-            in_single_quote = not in_single_quote
-            result.append(ch)
-            escaped = False
-            continue
-
-        if ch == '"' and not in_single_quote and not escaped:
-            in_double_quote = not in_double_quote
-            result.append(ch)
-            escaped = False
-            continue
-
-        if ch == "?" and not in_single_quote and not in_double_quote:
-            result.append("%s")
-        elif ch == "%" and (in_single_quote or in_double_quote):
-            # Escape literal % inside SQL string literals so psycopg2 won't
-            # treat them as parameter markers (e.g. LIKE '%foo%').
-            result.append("%%")
-        else:
-            result.append(ch)
-        escaped = False
-
-    return "".join(result)
-
-
-def _adapt_sql_for_postgres(sql: str) -> str:
+    # -- syntax conversions --
     adapted = sql
     adapted = adapted.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
     if re.search(r"\bINSERT\s+OR\s+IGNORE\s+INTO\b", adapted, flags=re.IGNORECASE):
@@ -106,7 +71,39 @@ def _adapt_sql_for_postgres(sql: str) -> str:
                 + " DO UPDATE SET sent_at = EXCLUDED.sent_at"
             )
 
-    return _replace_qmark_placeholders(adapted)
+    # -- parameter marker conversion --
+    result: list[str] = []
+    in_single_quote = False
+    in_double_quote = False
+    escaped = False
+
+    for ch in adapted:
+        if ch == "\\" and not escaped:
+            escaped = True
+            result.append(ch)
+            continue
+
+        if ch == "'" and not in_double_quote and not escaped:
+            in_single_quote = not in_single_quote
+            result.append(ch)
+            escaped = False
+            continue
+
+        if ch == '"' and not in_single_quote and not escaped:
+            in_double_quote = not in_double_quote
+            result.append(ch)
+            escaped = False
+            continue
+
+        if ch == "?" and not in_single_quote and not in_double_quote:
+            result.append("%s")
+        elif ch == "%" and (in_single_quote or in_double_quote):
+            result.append("%%")
+        else:
+            result.append(ch)
+        escaped = False
+
+    return "".join(result)
 
 
 class PostgresCursorCompat:
@@ -150,7 +147,7 @@ class PostgresCursorCompat:
             return self
 
         self._manual_rows = None
-        adapted_sql = _adapt_sql_for_postgres(sql)
+        adapted_sql = _prepare_sql(sql)
         self._cursor.execute(adapted_sql, params)
         self._lastrowid = None
         if re.match(r"^\s*INSERT\s+INTO\b", adapted_sql, flags=re.IGNORECASE):
@@ -5898,9 +5895,9 @@ def get_topups_history() -> dict:
 def add_schedule_slot(direction_id: int, schedule_type: str, day_of_week, specific_date, lesson_time: str, created_by: int) -> int:
     conn = get_connection()
     cur = conn.cursor()
-    sql = _replace_qmark_placeholders(
+    sql = (
         "INSERT INTO schedule_slots (direction_id, schedule_type, day_of_week, specific_date, lesson_time, created_by, is_active, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, 1, ?)"
+        "VALUES (%s, %s, %s, %s, %s, %s, 1, %s)"
     )
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     cur.execute(sql, (direction_id, schedule_type, day_of_week, specific_date, lesson_time, created_by, now))
@@ -5913,7 +5910,7 @@ def add_schedule_slot(direction_id: int, schedule_type: str, day_of_week, specif
 def get_teacher_schedule_slots(teacher_telegram_id: int) -> list:
     conn = get_connection()
     cur = conn.cursor()
-    sql = _replace_qmark_placeholders("""
+    sql = """
         SELECT ss.id, ss.schedule_type, ss.day_of_week, ss.lesson_time, ss.specific_date,
                s.full_name AS student_name, subj.name AS subject_name
         FROM schedule_slots ss
@@ -5921,22 +5918,22 @@ def get_teacher_schedule_slots(teacher_telegram_id: int) -> list:
         JOIN students s ON s.id = sl.student_id
         JOIN teachers t ON t.id = sl.teacher_id
         LEFT JOIN teacher_subjects subj ON subj.teacher_id = t.id AND subj.id = sl.teacher_subject_id
-        WHERE t.telegram_id = ? AND ss.is_active = 1
+        WHERE t.telegram_id = %s AND ss.is_active = 1
         ORDER BY ss.day_of_week NULLS LAST, ss.lesson_time
-    """)
+    """
     try:
         cur.execute(sql, (teacher_telegram_id,))
     except Exception:
-        sql2 = _replace_qmark_placeholders("""
+        sql2 = """
             SELECT ss.id, ss.schedule_type, ss.day_of_week, ss.lesson_time, ss.specific_date,
                    s.full_name AS student_name, sl.subject_name AS subject_name
             FROM schedule_slots ss
             JOIN student_lessons sl ON sl.id = ss.direction_id
             JOIN students s ON s.id = sl.student_id
             JOIN teachers t ON t.id = sl.teacher_id
-            WHERE t.telegram_id = ? AND ss.is_active = 1
+            WHERE t.telegram_id = %s AND ss.is_active = 1
             ORDER BY ss.day_of_week, ss.lesson_time
-        """)
+        """
         cur.execute(sql2, (teacher_telegram_id,))
     rows = cur.fetchall()
     conn.close()
@@ -5957,9 +5954,9 @@ def get_teacher_schedule_slots(teacher_telegram_id: int) -> list:
 def get_schedule_slot_by_id(slot_id: int) -> dict:
     conn = get_connection()
     cur = conn.cursor()
-    sql = _replace_qmark_placeholders(
+    sql = (
         "SELECT id, schedule_type, day_of_week, lesson_time, specific_date, direction_id, created_by, is_active "
-        "FROM schedule_slots WHERE id = ?"
+        "FROM schedule_slots WHERE id = %s"
     )
     cur.execute(sql, (slot_id,))
     row = cur.fetchone()
@@ -5981,9 +5978,7 @@ def get_schedule_slot_by_id(slot_id: int) -> dict:
 def deactivate_schedule_slot(slot_id: int) -> None:
     conn = get_connection()
     cur = conn.cursor()
-    sql = _replace_qmark_placeholders(
-        "UPDATE schedule_slots SET is_active = 0 WHERE id = ?"
-    )
+    sql = "UPDATE schedule_slots SET is_active = 0 WHERE id = %s"
     cur.execute(sql, (slot_id,))
     conn.commit()
     conn.close()
@@ -5992,14 +5987,14 @@ def deactivate_schedule_slot(slot_id: int) -> None:
 def get_teacher_directions_for_schedule(teacher_telegram_id: int) -> list:
     conn = get_connection()
     cur = conn.cursor()
-    sql = _replace_qmark_placeholders("""
+    sql = """
         SELECT sl.id, s.full_name AS student_name, sl.subject_name
         FROM student_lessons sl
         JOIN students s ON s.id = sl.student_id
         JOIN teachers t ON t.id = sl.teacher_id
-        WHERE t.telegram_id = ? AND sl.is_active = 1
+        WHERE t.telegram_id = %s AND sl.is_active = 1
         ORDER BY s.full_name
-    """)
+    """
     try:
         cur.execute(sql, (teacher_telegram_id,))
         rows = cur.fetchall()

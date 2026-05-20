@@ -11,8 +11,7 @@ from shared import database
 
 
 @pytest.fixture()
-def db(tmp_path, monkeypatch):
-    test_db_path = tmp_path / "school_system_test.db"
-    monkeypatch.setattr(database, "DB_PATH", test_db_path)
+def db():
+    """Return the database module connected to the PostgreSQL instance at DATABASE_URL."""
     database.init_db()
     return database

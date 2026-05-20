@@ -11,9 +11,6 @@ __pycache__/
 logs/
 *.log
 .python_packages/
-*.sqlite3
-*.db
-shared/*.db
 school-bot/venv/
 school_admin_bot/venv/
 .venv/
@@ -27,3 +24,7 @@ Desktop.ini
 *google*key*.json
 .DS_Store
 .claude/worktrees/
+
+# Uploaded media — managed at runtime, must not be wiped by git
+assets/teachers_uploaded/
+assets/reviews/
