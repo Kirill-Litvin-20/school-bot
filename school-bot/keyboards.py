@@ -349,7 +349,7 @@ def get_package_selection_keyboard(packages: dict, promo=None) -> InlineKeyboard
     buttons = []
     promo_dtype = promo_dvalue = None
     if promo:
-        _, _, promo_dtype, promo_dvalue, applies_to_packages = promo
+        _, _, promo_dtype, promo_dvalue, applies_to_packages, *_ = promo
         promo_dvalue = float(promo_dvalue)
         # applies_to_packages: 0=single only, 1=packages only, 2=all
         if applies_to_packages not in (1, 2):
