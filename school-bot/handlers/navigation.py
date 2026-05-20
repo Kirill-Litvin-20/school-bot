@@ -352,6 +352,11 @@ async def choose_teacher_subject(callback: CallbackQuery, state: FSMContext):
         )
         return
 
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
     await send_teacher_card(callback.message, subject, 0, state)
     await state.set_state(ApplicationForm.teacher_card)
     await callback.answer()
