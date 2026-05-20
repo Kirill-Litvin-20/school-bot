@@ -1,6 +1,6 @@
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from config import APPLICATIONS_CHAT_ID
 from keyboards import (
@@ -13,6 +13,7 @@ from keyboards import (
     get_subjects_keyboard,
     get_teacher_choice_keyboard,
     get_teachers_keyboard,
+    get_user_type_keyboard,
 )
 from states import ApplicationForm
 
@@ -29,6 +30,16 @@ router = Router()
 router.message.filter(F.chat.type == "private")
 router.callback_query.filter(F.message.chat.type == "private")
 
+_BACK_KB = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="← Назад", callback_data="back_step")],
+])
+
+_CONFIRM_BACK_KB = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="✅ Отправить заявку", callback_data="confirm_submit")],
+    [InlineKeyboardButton(text="✍️ Изменить комментарий", callback_data="back_step")],
+    [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+])
+
 
 @router.callback_query(ApplicationForm.menu, lambda c: c.data == "menu_signup")
 async def menu_signup(callback: CallbackQuery, state: FSMContext):
@@ -36,26 +47,22 @@ async def menu_signup(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ApplicationForm.user_type)
     await flow_edit(
         callback, state,
-        "👤 Кто оставляет заявку?\n\nНапишите: <b>ученик</b> или <b>родитель</b>.",
-        parse_mode="HTML",
+        "👤 Кто оставляет заявку?",
+        get_user_type_keyboard(),
     )
     await callback.answer()
 
 
-@router.message(ApplicationForm.user_type)
-async def get_user_type_text(message: Message, state: FSMContext):
-    text = (message.text or "").strip().lower()
-    if "родител" in text:
-        user_type = "Родитель"
-    elif "учен" in text:
-        user_type = "Ученик"
-    else:
-        await message.answer("❓ Напишите: <b>ученик</b> или <b>родитель</b>.", parse_mode="HTML")
-        return
-
+@router.callback_query(
+    ApplicationForm.user_type,
+    lambda c: c.data in ["usertype_student", "usertype_parent"],
+)
+async def get_user_type(callback: CallbackQuery, state: FSMContext):
+    user_type = "Ученик" if callback.data == "usertype_student" else "Родитель"
     await state.update_data(user_type=user_type)
     await state.set_state(ApplicationForm.name)
-    await flow_message(message, state, "👤 Как к вам обращаться? Напишите имя.")
+    await flow_edit(callback, state, "👤 Как к вам обращаться? Напишите имя.", _BACK_KB)
+    await callback.answer()
 
 
 @router.callback_query(lambda c: c.data == "back_step")
@@ -63,9 +70,13 @@ async def back_step(callback: CallbackQuery, state: FSMContext):
     current_state = await state.get_state()
     data = await state.get_data()
 
-    if current_state == ApplicationForm.school_class.state:
+    if current_state == ApplicationForm.name.state:
+        await state.set_state(ApplicationForm.user_type)
+        await flow_edit(callback, state, "👤 Кто оставляет заявку?", get_user_type_keyboard())
+
+    elif current_state == ApplicationForm.school_class.state:
         await state.set_state(ApplicationForm.name)
-        await flow_edit(callback, state, "👤 Как к вам обращаться? Напишите имя.")
+        await flow_edit(callback, state, "👤 Как к вам обращаться? Напишите имя.", _BACK_KB)
 
     elif current_state == ApplicationForm.goal.state:
         await state.set_state(ApplicationForm.school_class)
@@ -107,14 +118,41 @@ async def back_step(callback: CallbackQuery, state: FSMContext):
         await state.set_state(ApplicationForm.contact_method)
         await flow_edit(callback, state, "📞 Выберите способ связи:", get_contact_method_keyboard())
 
+    elif current_state == ApplicationForm.comment.state:
+        contact_method = data.get("contact_method", "")
+        hint = "@username" if contact_method == "Telegram" else "+79991234567"
+        await state.set_state(ApplicationForm.contact_value)
+        await flow_edit(callback, state, f"📞 Укажите контакт для связи ({hint}):", _BACK_KB)
+
+    elif current_state == ApplicationForm.confirm_application.state:
+        await state.set_state(ApplicationForm.comment)
+        await flow_edit(
+            callback, state,
+            "💬 Добавьте комментарий (или напишите «-» если не нужен):",
+            _BACK_KB,
+        )
+
     await callback.answer()
 
 
 @router.message(ApplicationForm.name)
 async def get_name(message: Message, state: FSMContext):
-    await state.update_data(name=message.text)
+    name = (message.text or "").strip()
+    if not name:
+        await message.answer("❓ Пожалуйста, напишите ваше имя.")
+        return
+    await state.update_data(name=name)
+    try:
+        await message.delete()
+    except Exception:
+        pass
     await state.set_state(ApplicationForm.school_class)
-    await flow_message(message, state, "📚 Выберите класс:", get_class_keyboard())
+    await flow_message(
+        message, state,
+        f"👤 Ваше имя: <b>{name}</b>\n\n📚 Выберите класс:",
+        get_class_keyboard(),
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(ApplicationForm.school_class, lambda c: c.data.startswith("class_"))
@@ -214,7 +252,7 @@ async def choose_contact_method(callback: CallbackQuery, state: FSMContext):
     await state.update_data(contact_method=contact_method)
     hint = "@username" if contact_method == "Telegram" else "+79991234567"
     await state.set_state(ApplicationForm.contact_value)
-    await flow_edit(callback, state, f"📞 Укажите контакт для связи ({hint}):")
+    await flow_edit(callback, state, f"📞 Укажите контакт для связи ({hint}):", _BACK_KB)
     await callback.answer()
 
 
@@ -232,27 +270,54 @@ async def get_contact_value(message: Message, state: FSMContext):
         return
 
     await state.update_data(contact_value=contact_value)
+    try:
+        await message.delete()
+    except Exception:
+        pass
     await state.set_state(ApplicationForm.comment)
     await flow_message(
         message, state,
-        "💬 Добавьте комментарий (или напишите «-» если не нужен):"
+        f"📞 Контакт: <b>{contact_value}</b>\n\n💬 Добавьте комментарий (или напишите «-» если не нужен):",
+        _BACK_KB,
+        parse_mode="HTML",
     )
 
 
 @router.message(ApplicationForm.comment)
 async def get_comment(message: Message, state: FSMContext):
-    if (message.text or "").strip().lower() == "назад":
-        await state.set_state(ApplicationForm.contact_value)
-        await flow_message(message, state, "📞 Укажите контакт для связи:")
-        return
+    comment = (message.text or "").strip()
+    await state.update_data(comment=comment)
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
-    await state.update_data(comment=message.text)
+    data = await state.get_data()
+    preview = build_application_text(data)
+    await state.set_state(ApplicationForm.confirm_application)
+    await flow_message(
+        message, state,
+        f"📋 <b>Ваша заявка — проверьте перед отправкой:</b>\n\n{preview}",
+        _CONFIRM_BACK_KB,
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(ApplicationForm.confirm_application, lambda c: c.data == "confirm_submit")
+async def confirm_submit(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     text = build_application_text(data)
-    await message.bot.send_message(APPLICATIONS_CHAT_ID, text, parse_mode="HTML")
-    await message.answer(
-        "✅ Заявка отправлена! Мы свяжемся с вами в ближайшее время.",
-        reply_markup=get_main_menu_keyboard(),
-    )
+    await callback.message.bot.send_message(APPLICATIONS_CHAT_ID, text, parse_mode="HTML")
+    try:
+        await callback.message.edit_text(
+            "✅ Заявка отправлена! Мы свяжемся с вами в ближайшее время.",
+            reply_markup=get_main_menu_keyboard(),
+        )
+    except Exception:
+        await callback.message.answer(
+            "✅ Заявка отправлена! Мы свяжемся с вами в ближайшее время.",
+            reply_markup=get_main_menu_keyboard(),
+        )
     await state.clear()
     await state.set_state(ApplicationForm.menu)
+    await callback.answer()

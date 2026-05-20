@@ -16,6 +16,7 @@ from keyboards import (
     get_cabinet_keyboard,
     get_faq_menu_keyboard,
     get_faq_back_keyboard,
+    get_user_type_keyboard,
 )
 from shared.database import get_teacher_catalog_subjects
 from shared.database import (
@@ -250,9 +251,17 @@ async def menu_reviews(callback: CallbackQuery, state: FSMContext):
     reviews = get_review_cards()
 
     if not reviews:
-        await callback.message.answer("Отзывы пока не добавлены.")
+        try:
+            await callback.message.edit_text("Отзывы пока не добавлены.")
+        except Exception:
+            await callback.message.answer("Отзывы пока не добавлены.")
         await callback.answer()
         return
+
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
 
     await send_review_card(callback.message, 0, state)
     await state.set_state(ApplicationForm.review_card)
@@ -468,6 +477,7 @@ async def show_referral_code(callback: CallbackQuery):
 def _offers_back_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Оставить заявку", callback_data="menu_signup")],
+        [InlineKeyboardButton(text="✉️ Написать администратору", url="https://t.me/integral_school_ru")],
         [InlineKeyboardButton(text="← Назад", callback_data="menu_offers")],
     ])
 
@@ -517,18 +527,17 @@ async def show_first_package(callback: CallbackQuery):
 
 @router.callback_query(lambda c: c.data.startswith("apply_offer_"))
 async def apply_offer(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(ApplicationForm.menu)
-    # Redirect to signup flow via menu_signup
+    await state.clear()
     await state.set_state(ApplicationForm.user_type)
     try:
         await callback.message.edit_text(
-            "👤 Кто оставляет заявку?\n\nНапишите: <b>ученик</b> или <b>родитель</b>.",
-            parse_mode="HTML",
+            "👤 Кто оставляет заявку?",
+            reply_markup=get_user_type_keyboard(),
         )
     except Exception:
         await callback.message.answer(
-            "👤 Кто оставляет заявку?\n\nНапишите: <b>ученик</b> или <b>родитель</b>.",
-            parse_mode="HTML",
+            "👤 Кто оставляет заявку?",
+            reply_markup=get_user_type_keyboard(),
         )
     await callback.answer()
 

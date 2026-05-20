@@ -337,6 +337,7 @@ async def _show_payment_details(
     student_id = students[0][0]
     discount_percent = get_active_invitee_discount_percent(student_id)
     promo = get_active_promo_for_user(user_id)
+    promo_in_db = promo  # save before skip/applicability checks for button logic later
 
     fsm_data = await state.get_data()
     skip_promo = fsm_data.get("skip_promo", False)
@@ -380,10 +381,10 @@ async def _show_payment_details(
     payment_text = _build_payment_details_text(discount_block, promo_block, price_block, payment_type_label)
 
     detail_buttons = []
-    active_promo = get_active_promo_for_user(user_id)
-    if active_promo and not skip_promo and payment_type != "debt":
+    # promo is already checked for applicability — use it instead of a fresh DB call
+    if promo and not skip_promo and payment_type != "debt":
         detail_buttons.append([InlineKeyboardButton(text="🚫 Оплатить без промокода", callback_data="pay_skip_promo")])
-    elif not active_promo and not skip_promo and payment_type != "debt":
+    elif not promo_in_db and not skip_promo and payment_type != "debt":
         detail_buttons.append([InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")])
     detail_buttons.append([InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")])
     detail_kb = InlineKeyboardMarkup(inline_keyboard=detail_buttons)
@@ -594,9 +595,18 @@ async def get_payment_proof(message: Message, state: FSMContext):
             _, _, _, subj, _, _, _, teacher = direction_row
             direction_label = f"{subj} — {teacher}"
 
-    # Determine if promo was actually applied (not skipped, not debt payment)
+    # Determine if promo was actually applied (not skipped, not debt, and applicable to payment type)
     promo = get_active_promo_for_user(message.from_user.id)
-    promo_applied = promo if (promo and not skip_promo and payment_type != "debt") else None
+    promo_applicable = False
+    if promo and not skip_promo and payment_type != "debt":
+        applies_to_packages = int(promo[4] or 0)
+        if applies_to_packages == 1 and payment_type == "single":
+            promo_applicable = False
+        elif applies_to_packages == 0 and payment_type == "package":
+            promo_applicable = False
+        else:
+            promo_applicable = True
+    promo_applied = promo if promo_applicable else None
     promo_code_id_used = promo_applied[0] if promo_applied else None
 
     payment_request_id = create_payment_request(

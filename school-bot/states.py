@@ -26,3 +26,4 @@ class ApplicationForm(StatesGroup):
     contact_method = State()
     contact_value = State()
     comment = State()
+    confirm_application = State()

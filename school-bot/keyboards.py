@@ -53,11 +53,11 @@ def get_back_button():
 
 
 def get_user_type_keyboard():
-    buttons = [
-        [InlineKeyboardButton(text="Ученик", callback_data="user_student")],
-        [InlineKeyboardButton(text="Родитель", callback_data="user_parent")],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎓 Ученик", callback_data="usertype_student")],
+        [InlineKeyboardButton(text="👨‍👩‍👧 Родитель", callback_data="usertype_parent")],
+        [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
+    ])
 
 
 def get_main_menu_keyboard():
