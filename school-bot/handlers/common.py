@@ -297,9 +297,21 @@ def build_cabinet_text(
             lines.append(f"🎁 Реферальная скидка <b>{discount_percent}%</b> на первую оплату")
         promo = get_active_promo_for_student_id(student_id)
         if promo:
-            _, code, dtype, dvalue, _ = promo
-            unit = "%" if dtype == "percent" else "₽"
-            lines.append(f"🎟 Промокод <b>{code}</b> — скидка {int(float(dvalue))}{unit}")
+            atp = promo[4]
+            valid_until = promo[5] if len(promo) > 5 else None
+            unit = "%" if promo[2] == "percent" else "₽"
+            scope_map = {0: "разовые занятия", 1: "пакеты занятий", 2: "разовые и пакеты"}
+            scope = scope_map.get(int(atp or 0), "занятия")
+            expiry = ""
+            if valid_until:
+                try:
+                    s = str(valid_until)[:16]  # "2026-05-17 00:10"
+                    y, m, d = s[:10].split("-")
+                    hhmm = s[11:16]
+                    expiry = f" до {d}.{m} {hhmm}"
+                except Exception:
+                    pass
+            lines.append(f"🎟 Промокод <b>{promo[1]}</b> — скидка {int(float(promo[3]))}{unit} на {scope}{expiry}")
 
     # --- Направления ---
     if directions:

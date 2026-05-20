@@ -22,6 +22,7 @@ from shared.database import (
     get_active_promo_for_user,
     get_payment_platform_info,
     get_payment_request_by_id,
+    get_promo_code_by_id,
     get_user_by_telegram_id,
     get_student_directions,
     get_student_lesson_by_id,
@@ -691,6 +692,7 @@ async def reject_payment_request(callback: CallbackQuery):
         _created_at,
         _updated_at,
         _preferred_direction_id,
+        *_,
     ) = payment
 
     if status == "approved":
@@ -933,6 +935,7 @@ async def choose_payment_direction(callback: CallbackQuery):
         _created_at,
         _updated_at,
         _preferred_direction_id,
+        *_,
     ) = payment
 
     discount_percent = get_active_invitee_discount_percent(student_id_owner)
@@ -1002,7 +1005,8 @@ async def _apply_topup(
         _created_at,
         _updated_at,
         _preferred_direction_id,
-    ) = payment
+        _promo_code_id_used,
+    ) = payment[:14]
 
     lesson = get_student_lesson_by_id(direction_id)
     if not lesson:
@@ -1079,6 +1083,15 @@ async def _apply_topup(
         parse_mode="HTML",
     )
 
+    # Build promo-used line for the notification
+    promo_used_line = ""
+    if _promo_code_id_used:
+        promo_row = get_promo_code_by_id(_promo_code_id_used)
+        if promo_row:
+            _, pcode, pdtype, pdvalue = promo_row
+            punit = "%" if pdtype == "percent" else "₽"
+            promo_used_line = f"\n🎟 Промокод <b>{pcode}</b> (-{int(float(pdvalue))}{punit}) использован."
+
     if telegram_user_id:
         try:
             await bot.send_message(
@@ -1086,7 +1099,8 @@ async def _apply_topup(
                 f"✅ <b>Ваша оплата подтверждена!</b>\n\n"
                 f"На баланс начислено {lessons_to_add} занятий.\n\n"
                 f"📚 <b>Предмет:</b> {subject_name}\n"
-                f"👨‍🏫 <b>Преподаватель:</b> {teacher_name}",
+                f"👨‍🏫 <b>Преподаватель:</b> {teacher_name}"
+                f"{promo_used_line}",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="open_cabinet")],

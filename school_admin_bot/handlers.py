@@ -128,6 +128,7 @@ from shared.database import (
     create_review_card,
     get_active_review_cards,
     deactivate_review_card,
+    update_review_card_media,
     get_admin_dashboard_metrics,
     get_current_debtors_summary,
     get_debtor_student_details,
@@ -1398,23 +1399,25 @@ async def admin_review_list(callback: CallbackQuery):
 
     await callback.message.answer(text, parse_mode="HTML")
 
-    # Кнопки удаления
+    # Кнопки управления отзывами
     buttons = []
-    for review in reviews[:10]:  # Максимум 10 кнопок в одном сообщении
+    for review in reviews[:10]:
         media_icon = "📷" if review.get("media_type") == "photo" else "📄" if review.get("media_type") == "document" else "📝"
-        buttons.append([InlineKeyboardButton(
-            text=f"🗑️ #{review['id']} {media_icon}",
-            callback_data=f"admin_delete_review_{review['id']}"
-        )])
+        rid = review['id']
+        buttons.append([
+            InlineKeyboardButton(text=f"📷 #{rid} фото", callback_data=f"admin_edit_review_photo_{rid}"),
+            InlineKeyboardButton(text=f"🗑️ #{rid}", callback_data=f"admin_delete_review_{rid}"),
+        ])
 
     if buttons:
         buttons.append([InlineKeyboardButton(text="↩️ Назад", callback_data="menu_home")])
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
         await callback.message.answer(
-            "🔴 <b>Удаление отзывов</b>\n\n"
-            "Выберите отзыв для удаления (действие необратимо):",
+            "✏️ <b>Управление отзывами</b>\n\n"
+            "📷 — заменить/добавить фото\n"
+            "🗑️ — удалить отзыв",
             parse_mode="HTML",
-            reply_markup=keyboard
+            reply_markup=keyboard,
         )
 
     await callback.answer()
@@ -1460,6 +1463,109 @@ async def admin_delete_review(callback: CallbackQuery):
         )
 
     await callback.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("admin_edit_review_photo_"))
+async def admin_edit_review_photo_start(callback: CallbackQuery, state: FSMContext):
+    if not is_admin_role(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    try:
+        review_id = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка", show_alert=True)
+        return
+    await state.update_data(edit_review_id=review_id)
+    await state.set_state(AdminStates.waiting_review_edit_media)
+    await callback.message.answer(
+        f"📷 <b>Замена фото отзыва #{review_id}</b>\n\n"
+        "Отправьте новое фото или файл.\n"
+        "Чтобы убрать медиа совсем — отправьте <code>-</code>.",
+        parse_mode="HTML",
+        reply_markup=get_main_menu_shortcut_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_review_edit_media)
+async def admin_edit_review_photo_receive(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    review_id = data.get("edit_review_id")
+    if not review_id:
+        await message.answer("Ошибка: ID отзыва не найден.")
+        await state.clear()
+        return
+
+    reviews_dir = Path("assets/reviews")
+    reviews_dir.mkdir(parents=True, exist_ok=True)
+
+    media_file_id = None
+    media_type = None
+    media_local_path = None
+    text_value = (message.text or "").strip()
+
+    if text_value == "-":
+        pass  # clear media
+    elif message.photo:
+        photo = message.photo[-1]
+        media_file_id = photo.file_id
+        media_type = "photo"
+        try:
+            from datetime import datetime as _dt
+            from uuid import uuid4
+            timestamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"review_{timestamp}_{uuid4().hex[:8]}.jpg"
+            target_path = reviews_dir / filename
+            file_info = await bot.get_file(photo.file_id)
+            await bot.download_file(file_info.file_path, destination=str(target_path))
+            media_local_path = f"assets/reviews/{filename}"
+            media_file_id = photo.file_unique_id
+        except Exception:
+            media_file_id = photo.file_id
+    elif message.document:
+        doc = message.document
+        mime_type = (doc.mime_type or "").lower()
+        file_name = (doc.file_name or "").lower()
+        if mime_type != "application/pdf" and not file_name.endswith(".pdf"):
+            await message.answer("❌ Поддерживаются только фото и PDF. Попробуйте ещё раз.")
+            return
+        media_file_id = doc.file_id
+        media_type = "document"
+        try:
+            from datetime import datetime as _dt
+            from uuid import uuid4
+            ext = ".pdf"
+            timestamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"review_{timestamp}_{uuid4().hex[:8]}{ext}"
+            target_path = reviews_dir / filename
+            file_info = await bot.get_file(doc.file_id)
+            await bot.download_file(file_info.file_path, destination=str(target_path))
+            media_local_path = f"assets/reviews/{filename}"
+        except Exception:
+            pass
+    else:
+        await message.answer("❌ Отправьте фото, PDF или «-» для удаления медиа.")
+        return
+
+    success = update_review_card_media(
+        review_id,
+        media_file_id=media_file_id,
+        media_type=media_type,
+        media_local_path=media_local_path,
+    )
+    await state.clear()
+    if success:
+        action = "удалено" if text_value == "-" else "обновлено"
+        await message.answer(
+            f"✅ <b>Медиа отзыва #{review_id} {action}</b>",
+            parse_mode="HTML",
+            reply_markup=get_admin_reply_menu(message.from_user.id),
+        )
+    else:
+        await message.answer(
+            f"❌ Отзыв #{review_id} не найден или уже удалён.",
+            reply_markup=get_admin_reply_menu(message.from_user.id),
+        )
 
 
 @router.callback_query(lambda c: c.data == "admin_add_student")
@@ -2582,12 +2688,24 @@ async def mark_student_attendance(callback: CallbackQuery):
     _, student_id, _, subject_name, lesson_balance_before, tariff_type, student_name, teacher_name = lesson
 
     if status == "present" and has_recent_attendance(direction_id, within_minutes=5):
-        await callback.answer(
-            f"⚠️ Занятие уже отмечено менее 5 минут назад!\n"
-            f"Ученик: {student_name} — {subject_name}\n"
-            f"Повторное списание не выполнено.",
-            show_alert=True,
+        confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="✅ Да, списать повторно",
+                callback_data=f"attendance_confirm_present_{direction_id}",
+            )],
+            [InlineKeyboardButton(
+                text="❌ Отмена",
+                callback_data=f"attendance_mark_cancel_{direction_id}",
+            )],
+        ])
+        await callback.message.edit_text(
+            f"⚠️ <b>Занятие уже отмечено менее 5 минут назад!</b>\n\n"
+            f"Ученик: <b>{student_name}</b> — {subject_name}\n\n"
+            f"Списать повторно?",
+            parse_mode="HTML",
+            reply_markup=confirm_kb,
         )
+        await callback.answer()
         return
 
     await callback.answer()
@@ -2673,6 +2791,95 @@ async def mark_student_attendance(callback: CallbackQuery):
 
     reply_kb = get_admin_reply_menu(callback.from_user.id) if is_admin_role(callback.from_user.id) else get_teacher_menu()
     await callback.message.answer("📋 Меню:", reply_markup=reply_kb)
+
+
+@router.callback_query(lambda c: c.data.startswith("attendance_confirm_present_"))
+async def attendance_confirm_present(callback: CallbackQuery):
+    direction_id = int(callback.data.split("_")[-1])
+    if not can_manage_attendance(callback.from_user.id, direction_id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    lesson = get_student_lesson_by_id(direction_id)
+    if not lesson:
+        await callback.answer("Направление не найдено", show_alert=True)
+        return
+    _, student_id, _, subject_name, lesson_balance_before, tariff_type, student_name, teacher_name = lesson
+    lesson_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    attendance_id = mark_attendance(direction_id, "present", callback.from_user.id)
+    log_admin_action(
+        admin_telegram_id=callback.from_user.id,
+        action_type="mark_attendance",
+        target_type="student_lesson",
+        target_id=direction_id,
+        details={"status": "present", "forced_repeat": True},
+        status="success",
+    )
+    updated_lesson = get_student_lesson_by_id(direction_id)
+    _, _, _, _, lesson_balance_after, _, _, _ = updated_lesson
+    marked_by_name = callback.from_user.full_name or str(callback.from_user.id)
+    asyncio.create_task(_sync_attendance_to_sheets(
+        attendance_id=attendance_id,
+        lesson_datetime=lesson_datetime,
+        teacher_name=teacher_name,
+        student_name=student_name,
+        subject_name=subject_name,
+        tariff_type=tariff_type,
+        status="present",
+        balance_before=lesson_balance_before,
+        balance_after=lesson_balance_after,
+        marked_by_name=marked_by_name,
+    ))
+    asyncio.create_task(_update_summary_sheets_bg())
+    student = get_student_by_id(student_id)
+    student_telegram_id = student[2] if student else None
+    student_max_id = get_student_max_id(student_id)
+    await notify_student_about_attendance_clean(
+        callback,
+        student_telegram_id=student_telegram_id,
+        student_max_id=student_max_id,
+        student_name=student_name,
+        subject_name=subject_name,
+        teacher_name=teacher_name,
+        tariff_type=tariff_type,
+        status="present",
+        lesson_balance_before=lesson_balance_before,
+        lesson_balance_after=lesson_balance_after,
+    )
+    confirmation_text = (
+        f"✅ <b>Повторное списание выполнено</b>\n\n"
+        f"👤 <b>Ученик:</b> {student_name}\n"
+        f"📚 <b>Предмет:</b> {subject_name}\n"
+        f"💾 <b>Баланс был:</b> {lesson_balance_before} → <b>стал:</b> {lesson_balance_after}"
+    )
+    try:
+        await callback.message.edit_text(confirmation_text, parse_mode="HTML", reply_markup=None)
+    except Exception:
+        await callback.message.answer(confirmation_text, parse_mode="HTML")
+    reply_kb = get_admin_reply_menu(callback.from_user.id) if is_admin_role(callback.from_user.id) else get_teacher_menu()
+    await callback.message.answer("📋 Меню:", reply_markup=reply_kb)
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data.startswith("attendance_mark_cancel_"))
+async def attendance_mark_cancel(callback: CallbackQuery):
+    direction_id = int(callback.data.split("_")[-1])
+    lesson = get_student_lesson_by_id(direction_id)
+    if not lesson:
+        await callback.answer("Направление не найдено", show_alert=True)
+        return
+    _, student_id, _, subject_name, lesson_balance, tariff_type, student_name, teacher_name = lesson
+    try:
+        await callback.message.edit_text(
+            f"Ученик: {student_name}\n"
+            f"Предмет: {subject_name}\n"
+            f"Преподаватель: {teacher_name}\n"
+            f"Остаток: {lesson_balance}\n\n"
+            f"Отметьте посещение:",
+            reply_markup=get_attendance_mark_keyboard(direction_id),
+        )
+    except Exception:
+        pass
+    await callback.answer("Отменено")
 
 
 @router.callback_query(lambda c: c.data == "admin_add_balance")

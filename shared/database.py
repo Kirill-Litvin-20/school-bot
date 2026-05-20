@@ -1942,7 +1942,8 @@ def get_payment_request_by_id(payment_request_id: int):
         """
         SELECT id, telegram_user_id, telegram_username, telegram_full_name,
                caption_text, file_id, file_type, status, approved_by,
-               rejected_by, created_at, updated_at, preferred_direction_id
+               rejected_by, created_at, updated_at, preferred_direction_id,
+               promo_code_id_used
         FROM payment_requests
         WHERE id = ?
         """,
@@ -4000,6 +4001,43 @@ def create_review_card(
     return review_id
 
 
+def update_review_card_media(
+    review_id: int,
+    *,
+    media_file_id: str | None,
+    media_type: str | None,
+    media_local_path: str | None,
+) -> bool:
+    conn = get_connection()
+    cur = conn.cursor()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cur.execute(
+        """
+        UPDATE review_cards
+        SET media_file_id = ?, media_type = ?, media_local_path = ?, updated_at = ?
+        WHERE id = ? AND is_active = 1
+        """,
+        (media_file_id, media_type, media_local_path, now, review_id),
+    )
+    conn.commit()
+    success = cur.rowcount > 0
+    conn.close()
+    return success
+
+
+def get_promo_code_by_id(promo_code_id: int):
+    """Return (id, code, discount_type, discount_value) for a promo code or None."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, code, discount_type, discount_value FROM promo_codes WHERE id = ?",
+        (promo_code_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
 def deactivate_review_card(review_id: int) -> bool:
     """Деактивировать отзыв (сделать невидимым для учеников)"""
     conn = get_connection()
@@ -5423,7 +5461,7 @@ def get_active_promo_for_student_id(student_id: int):
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT pc.id, pc.code, pc.discount_type, pc.discount_value, pc.applies_to_packages
+        SELECT pc.id, pc.code, pc.discount_type, pc.discount_value, pc.applies_to_packages, pc.valid_until
         FROM promo_codes pc
         JOIN student_promo_codes spc ON spc.promo_code_id = pc.id
         WHERE spc.student_id = ?
@@ -5449,7 +5487,7 @@ def get_active_promo_for_user(telegram_user_id: int):
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT pc.id, pc.code, pc.discount_type, pc.discount_value, pc.applies_to_packages
+        SELECT pc.id, pc.code, pc.discount_type, pc.discount_value, pc.applies_to_packages, pc.valid_until
         FROM promo_codes pc
         JOIN student_promo_codes spc ON spc.promo_code_id = pc.id
         JOIN students s ON s.id = spc.student_id
@@ -5476,7 +5514,7 @@ def get_active_promo_for_max_user(max_user_id: int):
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT pc.id, pc.code, pc.discount_type, pc.discount_value, pc.applies_to_packages
+        SELECT pc.id, pc.code, pc.discount_type, pc.discount_value, pc.applies_to_packages, pc.valid_until
         FROM promo_codes pc
         JOIN student_promo_codes spc ON spc.promo_code_id = pc.id
         JOIN students s ON s.id = spc.student_id
