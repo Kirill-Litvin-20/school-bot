@@ -1384,41 +1384,29 @@ async def admin_review_list(callback: CallbackQuery):
         await callback.answer()
         return
 
-    text = "<b>📋 Активные отзывы</b>\n\n"
-    for idx, review in enumerate(reviews, 1):
-        media_emoji = "📷" if review.get("media_type") == "photo" else "📄" if review.get("media_type") == "document" else "📝"
-        desc_preview = (review.get("description") or "Нет описания")[:35]
-        links_count = len(review.get("links") or [])
-        links_emoji = f"🔗 {links_count}" if links_count > 0 else ""
-
-        text += (
-            f"<b>#{review['id']}</b> {media_emoji}\n"
-            f"  📌 {desc_preview}{'...' if len(review.get('description', '')) > 35 else ''}\n"
-            f"  {links_emoji}\n\n"
-        )
-
-    await callback.message.answer(text, parse_mode="HTML")
-
-    # Кнопки управления отзывами
     buttons = []
-    for review in reviews[:10]:
-        media_icon = "📷" if review.get("media_type") == "photo" else "📄" if review.get("media_type") == "document" else "📝"
+    for review in reviews:
         rid = review['id']
+        media_icon = "📷" if review.get("media_type") == "photo" else "📄" if review.get("media_type") == "document" else "📝"
+        desc = review.get("description") or ""
+        desc_short = (desc[:32] + "…") if len(desc) > 32 else (desc or "(без текста)")
         buttons.append([
-            InlineKeyboardButton(text=f"📷 #{rid} фото", callback_data=f"admin_edit_review_photo_{rid}"),
-            InlineKeyboardButton(text=f"🗑️ #{rid}", callback_data=f"admin_delete_review_{rid}"),
+            InlineKeyboardButton(
+                text=f"{media_icon} #{rid} · {desc_short}",
+                callback_data=f"admin_edit_review_photo_{rid}",
+            ),
+            InlineKeyboardButton(text="🗑️", callback_data=f"admin_delete_review_{rid}"),
         ])
 
-    if buttons:
-        buttons.append([InlineKeyboardButton(text="↩️ Назад", callback_data="menu_home")])
-        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-        await callback.message.answer(
-            "✏️ <b>Управление отзывами</b>\n\n"
-            "📷 — заменить/добавить фото\n"
-            "🗑️ — удалить отзыв",
-            parse_mode="HTML",
-            reply_markup=keyboard,
-        )
+    buttons.append([InlineKeyboardButton(text="↩️ Назад", callback_data="menu_home")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await callback.message.answer(
+        f"✏️ <b>Управление отзывами</b> ({len(reviews)} шт.)\n\n"
+        "Нажмите на отзыв — заменить/добавить фото\n"
+        "🗑️ — удалить отзыв",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
 
     await callback.answer()
 
