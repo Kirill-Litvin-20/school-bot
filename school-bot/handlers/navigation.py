@@ -662,7 +662,7 @@ async def enter_promo_start(callback: CallbackQuery, state: FSMContext):
         return
     promo = get_active_promo_for_user(callback.from_user.id)
     if promo:
-        _, code, dtype, dvalue, _ = promo
+        _, code, dtype, dvalue, *_ = promo
         unit = "%" if dtype == "percent" else "₽"
         try:
             await callback.message.edit_text(

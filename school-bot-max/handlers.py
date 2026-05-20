@@ -179,7 +179,7 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
             lines.append(f"🎁 Реферальная скидка {discount_percent}% на первую оплату")
         promo = get_active_promo_for_student_id(student_id)
         if promo:
-            _, code, dtype, dvalue, _ = promo
+            _, code, dtype, dvalue, *_ = promo
             unit = "%" if dtype == "percent" else "₽"
             lines.append(f"🎟 Промокод {code} — скидка {int(float(dvalue))}{unit}")
 
@@ -715,7 +715,7 @@ async def _process_payment_file(
 
         promo_line = ""
         if promo_applied:
-            _, code, dtype, dvalue, _ = promo_applied
+            _, code, dtype, dvalue, *_ = promo_applied
             unit = "%" if dtype == "percent" else "₽"
             promo_line = f"\n🎟 Промокод: {code} (-{int(dvalue)}{unit})"
 
@@ -863,7 +863,7 @@ async def _dispatch_callback(
             return
         promo = get_active_promo_for_max_user(user_id)
         if promo:
-            _, code, dtype, dvalue, _ = promo
+            _, code, dtype, dvalue, *_ = promo
             unit = "%" if dtype == "percent" else "₽"
             await _reply(
                 api, user_id, message_id,
@@ -951,7 +951,7 @@ async def _dispatch_callback(
         promo = get_active_promo_for_max_user(user_id)
         promo_hint = ""
         if promo:
-            _, code, dtype, dvalue, atp = promo
+            _, code, dtype, dvalue, atp, *_ = promo
             unit = "%" if dtype == "percent" else "₽"
             scope_map = {0: "разовые занятия", 1: "пакеты занятий", 2: "разовые и пакеты"}
             promo_hint = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) — {scope_map.get(int(atp or 0), 'занятия')}"
@@ -1012,7 +1012,7 @@ async def _dispatch_callback(
 
         promo_block = ""
         if promo and payload != "pay_debt":
-            _, code, dtype, dvalue, _ = promo
+            _, code, dtype, dvalue, *_ = promo
             unit = "%" if dtype == "percent" else "₽"
             promo_block = f"\n🎟 Применён промокод {code} ({int(float(dvalue))}{unit})\n"
 
@@ -1063,7 +1063,7 @@ async def _dispatch_callback(
         promo = get_active_promo_for_max_user(user_id)
         promo_hint = ""
         if promo:
-            _, code, dtype, dvalue, atp = promo
+            _, code, dtype, dvalue, atp, *_ = promo
             unit = "%" if dtype == "percent" else "₽"
             scope_map = {0: "разовые занятия", 1: "пакеты занятий", 2: "разовые и пакеты"}
             promo_hint = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) — {scope_map.get(int(atp or 0), 'занятия')}"
@@ -1124,7 +1124,7 @@ async def _dispatch_callback(
         promo = get_active_promo_for_max_user(user_id)
         promo_note = ""
         if promo:
-            _, code, dtype, dvalue, applies_to_packages = promo
+            _, code, dtype, dvalue, applies_to_packages, *_ = promo
             unit = "%" if dtype == "percent" else "₽"
             applies_to_pkg = int(applies_to_packages or 0) in (1, 2)
             if applies_to_pkg:
@@ -1171,7 +1171,7 @@ async def _dispatch_callback(
         price_block = f"\n💵 Стоимость пакета: {price}₽\n"
         promo_block = ""
         if promo:
-            _, code, dtype, dvalue, _ = promo
+            _, code, dtype, dvalue, *_ = promo
             dvalue_f = float(dvalue)
             unit = "%" if dtype == "percent" else "₽"
             if dtype == "fixed_rub":
@@ -1223,7 +1223,7 @@ async def _dispatch_callback(
         promo = get_active_promo_for_max_user(user_id)
         promo_hint = ""
         if promo:
-            _, code, dtype, dvalue, _ = promo
+            _, code, dtype, dvalue, *_ = promo
             unit = "%" if dtype == "percent" else "₽"
             scope = "на оплату 1 занятия" if dtype == "percent" else "на занятия и пакеты"
             promo_hint = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) ({scope})"

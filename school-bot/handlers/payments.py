@@ -83,7 +83,7 @@ def _calc_price_block(payment_type: str, promo, debt_lessons: int = 0) -> str:
     """Return a text block with price calculation, or empty string if unknown."""
     dtype = dvalue = None
     if promo:
-        _, _, dtype, dvalue, _ = promo
+        _, _, dtype, dvalue, *_ = promo
         dvalue = float(dvalue)
 
     if payment_type == "single" and LESSON_PRICE:
@@ -224,7 +224,7 @@ async def _show_payment_type_choice(callback: CallbackQuery, state: FSMContext, 
     promo = get_active_promo_for_user(callback.from_user.id)
     promo_hint = ""
     if promo and not has_debt:
-        _, code, dtype, dvalue, atp = promo
+        _, code, dtype, dvalue, atp, *_ = promo
         unit = "%" if dtype == "percent" else "₽"
         scope_map = {0: "разовые занятия", 1: "пакеты занятий", 2: "разовые и пакеты"}
         scope = scope_map.get(int(atp or 0), "занятия")
@@ -357,7 +357,7 @@ async def _show_payment_details(
 
     promo_block = ""
     if promo and payment_type != "debt":
-        _, code, dtype, dvalue, applies_to_packages = promo
+        _, code, dtype, dvalue, applies_to_packages, *_ = promo
         unit = "%" if dtype == "percent" else "₽"
         promo_only_packages = int(applies_to_packages or 0) == 1
         promo_only_single = int(applies_to_packages or 0) == 0
@@ -504,7 +504,7 @@ async def pay_package(callback: CallbackQuery, state: FSMContext):
     promo = get_active_promo_for_user(callback.from_user.id)
     promo_note = ""
     if promo:
-        _, code, dtype, dvalue, applies_to_packages = promo
+        _, code, dtype, dvalue, applies_to_packages, *_ = promo
         unit = "%" if dtype == "percent" else "₽"
         applies_to_pkg = int(applies_to_packages or 0) in (1, 2)
         if applies_to_pkg:
@@ -543,7 +543,7 @@ async def package_back_to_type(callback: CallbackQuery, state: FSMContext):
     promo = get_active_promo_for_user(callback.from_user.id)
     promo_hint = ""
     if promo:
-        _, code, dtype, dvalue, _ = promo
+        _, code, dtype, dvalue, *_ = promo
         unit = "%" if dtype == "percent" else "₽"
         scope = "на оплату 1 занятия" if dtype == "percent" else "на занятия и пакеты"
         promo_hint = f"\n\nАктивная скидка: промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) ({scope})"
@@ -628,7 +628,7 @@ async def get_payment_proof(message: Message, state: FSMContext):
 
     promo_label = None
     if promo_applied:
-        _, code, dtype, dvalue, _ = promo_applied
+        _, code, dtype, dvalue, *_ = promo_applied
         unit = "%" if dtype == "percent" else "₽"
         promo_label = f"{code} (-{int(dvalue)}{unit})"
 
