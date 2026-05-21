@@ -197,7 +197,7 @@ def package_selection_kb(packages: dict, promo=None) -> list[dict]:
     """packages: {lessons: price}, promo: tuple or None"""
     promo_dtype = promo_dvalue = None
     if promo:
-        _, _, promo_dtype, promo_dvalue, _ = promo
+        _, _, promo_dtype, promo_dvalue, *_ = promo
         promo_dvalue = float(promo_dvalue)
 
     rows = []
