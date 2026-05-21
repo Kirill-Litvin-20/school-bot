@@ -278,6 +278,7 @@ def build_cabinet_text(
     directions: list[tuple],
     recent_payments: list[tuple],
     student_id: int | None = None,
+    max_linked: bool = False,
 ) -> str:
     positive_balance = sum(d[3] for d in directions if d[3] > 0)
     debt_total = sum(-d[3] for d in directions if d[3] < 0)
@@ -289,6 +290,11 @@ def build_cabinet_text(
         lines.append(f"🔴 <b>Долг:</b> {debt_total} зан.   |   ✅ <b>Баланс:</b> {positive_balance} зан.")
     else:
         lines.append(f"✅ <b>Баланс:</b> {positive_balance} зан.")
+
+    if max_linked:
+        lines.append("📱 MAX: ✅ подключён")
+    else:
+        lines.append("📱 MAX: ➖ не привязан")
 
     # --- Скидки / промокод ---
     if student_id is not None:

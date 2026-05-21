@@ -281,14 +281,16 @@ async def menu_cabinet(callback: CallbackQuery, state: FSMContext):
 
     student_id, student_name, _, _ = students[0]
     try:
+        max_linked = _student_has_max(student_id)
         directions = get_student_directions(student_id)
         recent_payments = get_recent_payment_history_by_student_id(student_id, limit=4)
-        text = build_cabinet_text(student_name, directions, recent_payments, student_id=student_id)
+        text = build_cabinet_text(student_name, directions, recent_payments, student_id=student_id, max_linked=max_linked)
         text += build_multi_students_warning(len(students))
+        kb = get_cabinet_keyboard(max_linked=max_linked)
         try:
-            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard())
+            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
         except Exception:
-            await callback.message.answer(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard())
+            await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
     except Exception:
         logger.exception("menu_cabinet failed for user %s", callback.from_user.id)
         await callback.answer(
@@ -308,14 +310,16 @@ async def open_cabinet_any_state(callback: CallbackQuery, state: FSMContext):
     student_id, student_name, _, _ = students[0]
     await state.set_state(ApplicationForm.menu)
     try:
+        max_linked = _student_has_max(student_id)
         directions = get_student_directions(student_id)
         recent_payments = get_recent_payment_history_by_student_id(student_id, limit=4)
-        text = build_cabinet_text(student_name, directions, recent_payments, student_id=student_id)
+        text = build_cabinet_text(student_name, directions, recent_payments, student_id=student_id, max_linked=max_linked)
         text += build_multi_students_warning(len(students))
+        kb = get_cabinet_keyboard(max_linked=max_linked)
         try:
-            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard())
+            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
         except Exception:
-            await callback.message.answer(text, parse_mode="HTML", reply_markup=get_cabinet_keyboard())
+            await callback.message.answer(text, parse_mode="HTML", reply_markup=kb)
     except Exception:
         logger.exception("open_cabinet failed for user %s", callback.from_user.id)
         await callback.answer("⚠️ Не удалось загрузить личный кабинет.", show_alert=True)

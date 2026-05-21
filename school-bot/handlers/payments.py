@@ -14,6 +14,7 @@ from keyboards import (
 from shared.database import (
     attach_first_payment,
     award_referral_bonus_to_inviter,
+    award_referral_bonus_max_inviter,
     create_payment_request,
     finalize_payment_with_topup,
     find_students_by_max_id,
@@ -1166,6 +1167,24 @@ async def _apply_topup(
                     "🎁 Реферальный бонус начислен пригласившему "
                     f"(tg_id={inviter_tg}, +{bonus['lessons_added']} в направлении "
                     f"«{bonus['subject_name']} — {bonus['teacher_name']}»).",
+                )
+            except Exception:
+                pass
+
+        # Also check MAX referral chain
+        max_bonus = award_referral_bonus_max_inviter(
+            invitee_student_id=student_id,
+            admin_id=admin_id,
+        )
+        if max_bonus and _max_client:
+            try:
+                await _max_client.send_message(
+                    max_bonus["inviter_max_id"],
+                    f"🎁 Реферальный бонус!\n\n"
+                    f"Ваш приглашённый ученик {student_name} оплатил первое занятие.\n"
+                    f"Вам начислено +{max_bonus['lessons_added']} бонусное занятие "
+                    f"в направлении «{max_bonus['subject_name']} — {max_bonus['teacher_name']}».\n\n"
+                    "Оно будет списано на ближайшем проведённом занятии.",
                 )
             except Exception:
                 pass

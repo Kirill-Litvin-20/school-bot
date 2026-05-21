@@ -45,6 +45,7 @@ async def process_update(api: MaxApiClient, update: dict) -> None:
                 user_id=user.get("user_id"),
                 name=user.get("name", ""),
                 username=user.get("username"),
+                payload=update.get("payload", ""),
             )
 
         elif update_type == "message_created":

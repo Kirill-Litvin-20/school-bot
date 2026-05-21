@@ -508,6 +508,21 @@ def init_db():
 
     cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS max_referrals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inviter_max_id INTEGER NOT NULL,
+            invitee_max_id INTEGER NOT NULL UNIQUE,
+            invitee_student_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'captured',
+            created_at TEXT NOT NULL,
+            rewarded_at TEXT,
+            reward_balance_history_id INTEGER
+        )
+        """
+    )
+
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS account_link_codes (
             code TEXT PRIMARY KEY,
             telegram_id INTEGER NOT NULL,
@@ -2769,6 +2784,28 @@ def get_oldest_direction_for_telegram_id(telegram_id: int):
         LIMIT 1
         """,
         (int(telegram_id),),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def get_oldest_direction_for_student_id(student_id: int):
+    """Return the oldest student_lesson row for a student_id."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT sl.id, sl.student_id, sl.teacher_id, sl.subject_name,
+               sl.lesson_balance, sl.tariff_type, s.full_name, t.full_name
+        FROM student_lessons sl
+        JOIN students s ON s.id = sl.student_id
+        JOIN teachers t ON t.id = sl.teacher_id
+        WHERE sl.student_id = ?
+        ORDER BY sl.id ASC
+        LIMIT 1
+        """,
+        (int(student_id),),
     )
     row = cur.fetchone()
     conn.close()
@@ -5200,6 +5237,8 @@ def link_max_to_student(student_id: int, max_id: int, max_username: str | None =
     changed = cur.rowcount > 0
     conn.commit()
     conn.close()
+    if changed:
+        link_invitee_student_max(max_id, student_id)
     return changed
 
 
@@ -5541,6 +5580,146 @@ def get_student_max_id(student_id: int) -> int | None:
     row = cur.fetchone()
     conn.close()
     return row[0] if row else None
+
+
+def capture_referral_max(inviter_max_id: int, invitee_max_id: int) -> bool:
+    """Record a MAX referral when an invitee opens the MAX bot via a referral link.
+
+    Idempotent: skips self-referrals and existing rows. Returns True if inserted.
+    """
+    if not inviter_max_id or not invitee_max_id:
+        return False
+    if int(inviter_max_id) == int(invitee_max_id):
+        return False
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT 1 FROM max_referrals WHERE invitee_max_id = ? LIMIT 1",
+            (int(invitee_max_id),),
+        )
+        if cur.fetchone():
+            return False
+        cur.execute(
+            """
+            INSERT INTO max_referrals (inviter_max_id, invitee_max_id, status, created_at)
+            VALUES (?, ?, 'captured', ?)
+            """,
+            (int(inviter_max_id), int(invitee_max_id), datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def link_invitee_student_max(invitee_max_id: int, student_id: int) -> bool:
+    """Tie a captured MAX referral to the freshly-linked student card."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE max_referrals
+            SET invitee_student_id = ?,
+                status = CASE WHEN status = 'captured' THEN 'student_linked' ELSE status END
+            WHERE invitee_max_id = ? AND status IN ('captured', 'student_linked')
+            """,
+            (int(student_id), int(invitee_max_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def award_referral_bonus_max_inviter(invitee_student_id: int, admin_id: int | None = None) -> dict | None:
+    """Award bonus to MAX inviter when invitee makes their first payment.
+
+    Looks up max_referrals for this invitee_student_id, credits bonus to inviter's
+    oldest direction, and returns a dict with inviter_max_id and lesson details.
+    """
+    _BONUS = 1
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, inviter_max_id, status
+        FROM max_referrals
+        WHERE invitee_student_id = ? AND status = 'student_linked'
+        LIMIT 1
+        """,
+        (int(invitee_student_id),),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    referral_id, inviter_max_id, _ = row
+
+    inviter_students = find_students_by_max_id(int(inviter_max_id))
+    if not inviter_students:
+        return None
+    inviter_student_id = inviter_students[0][0]
+    inviter_direction = get_oldest_direction_for_student_id(inviter_student_id)
+    if not inviter_direction:
+        return None
+
+    direction_id = int(inviter_direction[0])
+    subject_name = inviter_direction[3]
+    teacher_name = inviter_direction[7]
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE student_lessons SET lesson_balance = lesson_balance + ? WHERE id = ?",
+            (_BONUS, direction_id),
+        )
+        if cur.rowcount == 0:
+            conn.rollback()
+            return None
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute(
+            """
+            INSERT INTO balance_history (
+                student_lesson_id, operation_type, lessons_delta, comment, created_at, created_by
+            ) VALUES (?, 'referral_inviter_bonus', ?, ?, ?, ?)
+            """,
+            (direction_id, _BONUS,
+             f"MAX реферальный бонус за ученика #{int(invitee_student_id)}", now, admin_id),
+        )
+        bonus_history_id = cur.lastrowid
+        cur.execute(
+            """
+            UPDATE max_referrals
+            SET status = 'rewarded', rewarded_at = ?, reward_balance_history_id = ?
+            WHERE id = ? AND status = 'student_linked'
+            """,
+            (now, bonus_history_id, int(referral_id)),
+        )
+        if cur.rowcount == 0:
+            conn.rollback()
+            return None
+        conn.commit()
+        return {
+            "inviter_max_id": int(inviter_max_id),
+            "direction_id": direction_id,
+            "subject_name": subject_name,
+            "teacher_name": teacher_name,
+            "lessons_added": _BONUS,
+        }
+    except Exception:
+        conn.rollback()
+        return None
+    finally:
+        conn.close()
 
 
 def create_promo_code(

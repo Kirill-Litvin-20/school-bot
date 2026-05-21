@@ -25,10 +25,12 @@ sys.path.append(str(ROOT_DIR))
 from config import (
     APPLICATIONS_CHAT_ID,
     LESSON_PRICE,
+    MAX_BOT_USERNAME,
     PACKAGE_PRICES,
     PAYMENT_ACCOUNT_HOLDER,
     PAYMENT_BANK_NAME,
     PAYMENT_BANK_NUMBER,
+    PAYMENT_PHOTO_FILE_ID,
     PAYMENTS_CHAT_ID,
     TG_BOT_TOKEN,
     TG_BOT_USERNAME,
@@ -162,7 +164,36 @@ def _format_attendance_status(status: str) -> str:
     }.get(status, status or "—")
 
 
-def _build_cabinet_text(student_name: str, directions: list, payments: list, student_id: int | None = None) -> str:
+_payment_photo_url_cache: str | None = None
+
+
+async def _get_payment_photo_url() -> str | None:
+    """Download the payment banner from Telegram once, cache locally, return public URL."""
+    global _payment_photo_url_cache
+    if _payment_photo_url_cache is not None:
+        return _payment_photo_url_cache or None
+    if not PAYMENT_PHOTO_FILE_ID or not TG_BOT_TOKEN:
+        _payment_photo_url_cache = ""
+        return None
+    try:
+        assets_dir = ROOT_DIR / "assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        target_path = assets_dir / "payment_photo.jpg"
+        if not target_path.exists():
+            tg_bot = TelegramBot(token=TG_BOT_TOKEN)
+            tg_file = await tg_bot.get_file(PAYMENT_PHOTO_FILE_ID)
+            await tg_bot.download_file(tg_file.file_path, destination=target_path)
+            await tg_bot.session.close()
+        if target_path.exists():
+            _payment_photo_url_cache = f"{_SERVER_BASE_URL}/assets/payment_photo.jpg"
+            return _payment_photo_url_cache
+    except Exception as exc:
+        logger.warning("Failed to download payment photo: %s", exc)
+    _payment_photo_url_cache = ""
+    return None
+
+
+def _build_cabinet_text(student_name: str, directions: list, payments: list, student_id: int | None = None, tg_linked: bool = False) -> str:
     positive = sum(d[3] for d in directions if d[3] > 0)
     debt = sum(-d[3] for d in directions if d[3] < 0)
 
@@ -172,6 +203,11 @@ def _build_cabinet_text(student_name: str, directions: list, payments: list, stu
         lines.append(f"🔴 Долг: {debt} зан.   |   ✅ Баланс: {positive} зан.")
     else:
         lines.append(f"✅ Баланс: {positive} зан.")
+
+    if tg_linked:
+        lines.append("📱 Telegram: ✅ подключён")
+    else:
+        lines.append("📱 Telegram: ➖ не привязан")
 
     if student_id is not None:
         discount_percent = get_active_invitee_discount_percent(student_id)
@@ -249,6 +285,24 @@ async def _reply(
         except Exception as exc:
             logger.debug("edit_message mid=%s failed: %s", message_id, exc)
     return await api.send_message(user_id, text, kb)
+
+
+async def _reply_payment(
+    api: MaxApiClient, user_id: int, message_id: str | None, text: str, kb=None
+) -> dict:
+    """Show payment details. If a payment photo is available, send it as a photo message."""
+    photo_url = await _get_payment_photo_url()
+    if photo_url:
+        if message_id:
+            try:
+                await api.delete_message(message_id)
+            except Exception:
+                pass
+        try:
+            return await api.send_photo_url(user_id, photo_url, caption=text, attachments=kb or [])
+        except Exception as exc:
+            logger.warning("Payment photo send failed: %s", exc)
+    return await _reply(api, user_id, message_id, text, kb)
 
 
 async def _show_menu(
@@ -363,9 +417,19 @@ async def _send_review_card(
 # Entry points called by bot.py dispatcher
 # ──────────────────────────────────────────────────────────────────────────────
 
-async def handle_bot_started(api: MaxApiClient, user_id: int, name: str, username: str | None) -> None:
+async def handle_bot_started(api: MaxApiClient, user_id: int, name: str, username: str | None, payload: str = "") -> None:
     """Fired when the user taps 'Start' for the first time."""
     clear_max_fsm_state(user_id)
+
+    # Track MAX referral if payload contains ref info
+    if payload and payload.startswith("ref_"):
+        try:
+            inviter_max_id = int(payload[4:])
+            if inviter_max_id != user_id:
+                from shared.database import capture_referral_max
+                capture_referral_max(inviter_max_id, user_id)
+        except (ValueError, TypeError):
+            pass
 
     # Check if already linked
     students = find_students_by_max_id(user_id)
@@ -542,7 +606,8 @@ async def handle_file(
         )
         return
     fname = (filename or "").lower()
-    if not fname.endswith(".pdf"):
+    mime = (mime_type or "").lower()
+    if not fname.endswith(".pdf") and "pdf" not in mime:
         await api.send_message(user_id, "❓ Пожалуйста, отправьте PDF-файл чека.", keyboard([btn("← В меню", "back_to_menu")]))
         return
     await _process_payment_file(api, user_id, username, name, file_url, "pdf", caption)
@@ -656,7 +721,7 @@ async def _show_debt_payment_max(
     if LESSON_PRICE and debt_lessons > 0:
         base = LESSON_PRICE * debt_lessons
         price_block = f"\n💵 Сумма долга: {debt_lessons} × {LESSON_PRICE}₽ = {base}₽\n"
-    await _reply(
+    await _reply_payment(
         api, user_id, message_id,
         f"💰 Тип оплаты: 💸 Погашение долга"
         f"{price_block}\n"
@@ -852,7 +917,7 @@ async def _dispatch_callback(
         student_id, student_name, telegram_id, _ = students[0]
         directions = get_student_directions(student_id)
         payments = get_recent_payment_history_by_student_id(student_id, limit=4)
-        text = _build_cabinet_text(student_name, directions, payments, student_id=student_id)
+        text = _build_cabinet_text(student_name, directions, payments, student_id=student_id, tg_linked=bool(telegram_id))
         await _reply(api, user_id, message_id, text, cabinet_kb(tg_linked=bool(telegram_id)))
         return
 
@@ -956,7 +1021,7 @@ async def _dispatch_callback(
             scope_map = {0: "разовые занятия", 1: "пакеты занятий", 2: "разовые и пакеты"}
             promo_hint = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) — {scope_map.get(int(atp or 0), 'занятия')}"
         await _reply(api, user_id, message_id, f"Выберите вариант оплаты:{promo_hint}", keyboard(
-            [btn("✨ Оплатить одно занятие", "pay_single")],
+            [btn("✨ Разовая оплата", "pay_single")],
             [btn("📦 Выбрать пакет", "pay_package")],
             [btn("← В меню", "back_to_menu")],
         ))
@@ -983,7 +1048,7 @@ async def _dispatch_callback(
             if payload == "pay_single":
                 dtype_p = dvalue_p = None
                 if promo:
-                    _, promo_code_str, dtype_p, dvalue_p, atp = promo
+                    _, promo_code_str, dtype_p, dvalue_p, atp, *_ = promo
                     dvalue_p = float(dvalue_p)
                     applies_to_pkg = int(atp or 0) in (1, 2)
                     if applies_to_pkg:
@@ -1035,7 +1100,7 @@ async def _dispatch_callback(
         data["payment_type"] = payload
         data["payment_type_label"] = payment_type_label
         set_max_fsm_state(user_id, PAYMENT_PROOF, data)
-        await _reply(
+        await _reply_payment(
             api, user_id, message_id,
             f"💰 Тип оплаты: {payment_type_label}"
             f"{price_block}\n"
@@ -1068,7 +1133,7 @@ async def _dispatch_callback(
             scope_map = {0: "разовые занятия", 1: "пакеты занятий", 2: "разовые и пакеты"}
             promo_hint = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) — {scope_map.get(int(atp or 0), 'занятия')}"
         await _reply(api, user_id, message_id, f"Выберите вариант оплаты:{promo_hint}", keyboard(
-            [btn("✨ Оплатить одно занятие", "pay_single")],
+            [btn("✨ Разовая оплата", "pay_single")],
             [btn("📦 Выбрать пакет", "pay_package")],
             [btn("← В меню", "back_to_menu")],
         ))
@@ -1160,10 +1225,10 @@ async def _dispatch_callback(
         # Check if promo applies to packages
         promo_not_applicable_note = ""
         if promo:
-            _, _, _, _, applies_to_packages = promo
+            _, _, _, _, applies_to_packages, *_ = promo
             applies_to_pkg = int(applies_to_packages or 0) in (1, 2)
             if not applies_to_pkg:
-                _, promo_code_str, _, _, _ = promo
+                _, promo_code_str, _, _, _, *_ = promo
                 promo_not_applicable_note = f"\n🎟 Промокод {promo_code_str} применяется только к разовым занятиям\n"
                 promo = None
 
@@ -1199,7 +1264,7 @@ async def _dispatch_callback(
             )
         else:
             package_kb = keyboard([btn("← Назад", "pay_back_to_type")])
-        await _reply(
+        await _reply_payment(
             api, user_id, message_id,
             f"💰 Тип оплаты: {payment_type_label}"
             f"{price_block}\n"
@@ -1232,7 +1297,7 @@ async def _dispatch_callback(
             api, user_id, message_id,
             f"Выберите вариант оплаты:{promo_hint}",
             keyboard(
-                [btn("✨ Оплатить одно занятие", "pay_single")],
+                [btn("✨ Разовая оплата", "pay_single")],
                 [btn("📦 Выбрать пакет", "pay_package")],
                 [btn("← В меню", "back_to_menu")],
             ),
@@ -1565,38 +1630,52 @@ async def _dispatch_callback(
             await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе. Обратитесь к администратору.", back_menu_kb())
             return
         telegram_id = students[0][2]
-        if not telegram_id:
+        from shared.max_api import btn_url
+        if telegram_id:
+            tg_bot_username = TG_BOT_USERNAME or "integral_school_ru_bot"
+            referral_link = f"https://t.me/{tg_bot_username}?start=ref_{telegram_id}"
+            share_text = "Привет! Я занимаюсь в школе Интеграл и советую попробовать 🎓 Переходи по моей ссылке — получишь скидку 20% на первое занятие!"
+            share_url = f"https://t.me/share/url?url={quote(referral_link, safe='')}&text={quote(share_text, safe='')}"
+            ref_text = (
+                f"🎁 Ваша реферальная ссылка\n\n"
+                f"{referral_link}\n\n"
+                "Поделитесь ссылкой с другом — и оба получите бонус:\n\n"
+                "👤 Друг — скидка 20% на первую оплату\n"
+                "🎓 Вы — +1 занятие в подарок\n\n"
+                "Схема простая:\n"
+                "Друг переходит → бесплатная диагностика → оплачивает занятие со скидкой → вы получаете бонус"
+            )
             await _reply(
                 api, user_id, message_id,
-                "🎁 МОЙ РЕФЕРАЛЬНЫЙ КОД\n\n"
-                "Для получения реферальной ссылки сначала привяжите Telegram-аккаунт:\n"
-                "👤 Личный кабинет → 🔗 Связать с Telegram.\n\n"
-                "После привязки ссылка будет доступна здесь.",
+                ref_text,
                 keyboard(
-                    [btn("🔗 Связать с Telegram", "link_tg")],
+                    [btn_url("📤 Поделиться ссылкой", share_url)],
                     [btn("← В меню", "back_to_menu")],
                 ),
             )
-            return
-        tg_bot_username = TG_BOT_USERNAME or "integral_school_ru_bot"
-        referral_link = f"https://t.me/{tg_bot_username}?start=ref_{telegram_id}"
-        share_text = "Привет! Я занимаюсь в школе Интеграл и советую попробовать 🎓 Переходи по моей ссылке — получишь скидку 20% на первое занятие!"
-        share_url = f"https://t.me/share/url?url={quote(referral_link, safe='')}&text={quote(share_text, safe='')}"
-        from shared.max_api import btn_url
-        await _reply(
-            api, user_id, message_id,
-            f"🎁 Ваша реферальная ссылка\n\n"
-            f"{referral_link}\n\n"
-            "Поделитесь ссылкой с другом — и оба получите бонус:\n\n"
-            "👤 Друг — скидка 20% на первую оплату\n"
-            "🎓 Вы — +1 занятие в подарок\n\n"
-            "Схема простая:\n"
-            "Друг переходит → бесплатная диагностика → оплачивает занятие со скидкой → вы получаете бонус",
-            keyboard(
-                [btn_url("📤 Поделиться ссылкой", share_url)],
-                [btn("← В меню", "back_to_menu")],
-            ),
-        )
+        else:
+            # MAX-only user: generate MAX bot referral link
+            max_referral_link = ""
+            if MAX_BOT_USERNAME:
+                max_referral_link = f"https://max.ru/{MAX_BOT_USERNAME}?start=ref_{user_id}"
+            ref_text = (
+                "🎁 Ваша реферальная ссылка\n\n"
+                + (f"{max_referral_link}\n\n" if max_referral_link else "")
+                + "Поделитесь ссылкой с другом — и оба получите бонус:\n\n"
+                "👤 Друг — скидка 20% на первую оплату\n"
+                "🎓 Вы — +1 занятие в подарок\n\n"
+                "Схема простая:\n"
+                "Друг переходит → бесплатная диагностика → оплачивает занятие со скидкой → вы получаете бонус\n\n"
+                "💡 Чтобы также получить ссылку для Telegram, привяжите Telegram-аккаунт в Личном кабинете."
+            )
+            kb_rows = []
+            if max_referral_link:
+                share_text = "Привет! Я занимаюсь в школе Интеграл и советую попробовать 🎓 Переходи по моей ссылке — получишь скидку 20% на первое занятие!"
+                share_url = f"https://vk.com/share.php?url={quote(max_referral_link, safe='')}&title={quote(share_text, safe='')}"
+                kb_rows.append([btn_url("📤 Поделиться ссылкой", share_url)])
+            kb_rows.append([btn("🔗 Связать с Telegram", "link_tg")])
+            kb_rows.append([btn("← В меню", "back_to_menu")])
+            await _reply(api, user_id, message_id, ref_text, keyboard(*kb_rows))
         return
 
     if payload == "noop":

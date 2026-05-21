@@ -370,20 +370,20 @@ def get_package_selection_keyboard(packages: dict, promo=None) -> InlineKeyboard
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_cabinet_keyboard(has_debt: bool = False):
+def get_cabinet_keyboard(has_debt: bool = False, max_linked: bool = False):
     """Клавиатура для личного кабинета ученика"""
     pay_text = "💸 Погасить долг" if has_debt else "💳 Оплатить занятия"
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=pay_text, callback_data="menu_paid")],
-            [
-                InlineKeyboardButton(text="🎟 Промокод", callback_data="enter_promo"),
-                InlineKeyboardButton(text="🎁 Реферальный код", callback_data="show_referral_code"),
-            ],
-            [
-                InlineKeyboardButton(text="✉️ Написать администратору", url="https://t.me/integral_school_ru"),
-            ],
-            [InlineKeyboardButton(text="🔗 Подключить MAX", callback_data="link_max_start")],
-            [InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")],
-        ]
-    )
+    rows = [
+        [InlineKeyboardButton(text=pay_text, callback_data="menu_paid")],
+        [
+            InlineKeyboardButton(text="🎟 Промокод", callback_data="enter_promo"),
+            InlineKeyboardButton(text="🎁 Реферальный код", callback_data="show_referral_code"),
+        ],
+        [
+            InlineKeyboardButton(text="✉️ Написать администратору", url="https://t.me/integral_school_ru"),
+        ],
+    ]
+    if not max_linked:
+        rows.append([InlineKeyboardButton(text="🔗 Подключить MAX", callback_data="link_max_start")])
+    rows.append([InlineKeyboardButton(text="← В меню", callback_data="back_to_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)

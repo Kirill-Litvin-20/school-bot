@@ -50,6 +50,8 @@ LESSON_PRICE = int(os.getenv("LESSON_PRICE", "0"))
 PACKAGE_PRICES: dict[int, int] = {}
 MAX_ADMIN_USERNAME = os.getenv("MAX_ADMIN_USERNAME", "")
 MAX_ADMIN_TG_USERNAME = os.getenv("MAX_ADMIN_TG_USERNAME", "integral_school_ru")
+MAX_BOT_USERNAME = os.getenv("SCHOOL_MAX_BOT_USERNAME", "")
+PAYMENT_PHOTO_FILE_ID = os.getenv("SCHOOL_PAYMENT_PHOTO_FILE_ID", "")
 _raw_packages = os.getenv("PACKAGE_PRICES", "")
 for _item in _raw_packages.split(","):
     _item = _item.strip()

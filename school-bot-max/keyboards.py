@@ -65,9 +65,7 @@ def cabinet_kb(tg_linked: bool = False) -> list[dict]:
         [btn("🎁 Реферальный код", "show_referral_code")],
         [btn_url("✉️ Написать администратору", "https://t.me/integral_school_ru")],
     ]
-    if tg_linked:
-        rows.append([btn("✅ Telegram подключён", "noop")])
-    else:
+    if not tg_linked:
         rows.append([btn("🔗 Связать с Telegram", "link_tg")])
     rows.append([btn("← В меню", "back_to_menu")])
     return keyboard(*rows)
