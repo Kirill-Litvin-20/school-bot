@@ -488,6 +488,7 @@ async def handle_text(
     username: str | None,
     name: str,
     text: str,
+    user_message_mid: str | None = None,
 ) -> None:
     state, data = get_max_fsm_state(user_id)
 
