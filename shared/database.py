@@ -4478,6 +4478,22 @@ def get_active_admin_telegram_ids() -> list[int]:
     return [int(row[0]) for row in rows if row and row[0] is not None]
 
 
+def get_all_active_max_user_ids() -> list[int]:
+    """Return all MAX user IDs that have interacted with the bot (have FSM state or are linked students)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT max_user_id FROM max_fsm_state
+        UNION
+        SELECT DISTINCT max_id FROM students WHERE max_id IS NOT NULL
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [int(row[0]) for row in rows if row and row[0] is not None]
+
+
 def set_admin_visibility(telegram_id: int, is_visible: bool) -> bool:
     """Устанавливает видимость админа для учеников (по умолчанию видимы все)."""
     conn = get_connection()
