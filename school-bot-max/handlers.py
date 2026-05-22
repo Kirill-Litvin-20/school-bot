@@ -193,18 +193,15 @@ async def _get_tariff_photo_url() -> str | None:
 
 
 async def _get_payment_photo_url() -> str | None:
-    """Download the payment banner from Telegram once, cache locally, return public URL."""
+    """Return URL of payment photo — serve local file if it exists, otherwise download from Telegram."""
     global _payment_photo_url_cache
     if _payment_photo_url_cache is not None:
         return _payment_photo_url_cache or None
-    if not PAYMENT_PHOTO_FILE_ID or not TG_BOT_TOKEN:
-        _payment_photo_url_cache = ""
-        return None
     try:
         assets_dir = ROOT_DIR / "assets"
         assets_dir.mkdir(parents=True, exist_ok=True)
         target_path = assets_dir / "payment_photo.jpg"
-        if not target_path.exists():
+        if not target_path.exists() and PAYMENT_PHOTO_FILE_ID and TG_BOT_TOKEN:
             tg_bot = TelegramBot(token=TG_BOT_TOKEN)
             tg_file = await tg_bot.get_file(PAYMENT_PHOTO_FILE_ID)
             await tg_bot.download_file(tg_file.file_path, destination=target_path)
@@ -213,7 +210,7 @@ async def _get_payment_photo_url() -> str | None:
             _payment_photo_url_cache = f"{_SERVER_BASE_URL}/assets/payment_photo.jpg"
             return _payment_photo_url_cache
     except Exception as exc:
-        logger.warning("Failed to download payment photo: %s", exc)
+        logger.warning("Failed to get payment photo: %s", exc)
     _payment_photo_url_cache = ""
     return None
 
