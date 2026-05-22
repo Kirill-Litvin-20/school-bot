@@ -1911,6 +1911,8 @@ def create_payment_request(
 ):
     conn = get_connection()
     cur = conn.cursor()
+    _MSK = timezone(timedelta(hours=3))
+    now = datetime.now(_MSK).strftime("%Y-%m-%d %H:%M:%S")
 
     cur.execute(
         """
@@ -1936,8 +1938,8 @@ def create_payment_request(
             caption_text,
             file_id,
             file_type,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            now,
+            now,
             preferred_direction_id,
             promo_code_id_used,
         )
@@ -2314,7 +2316,8 @@ def finalize_payment_with_topup(
             conn.rollback()
             return False
 
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _MSK = timezone(timedelta(hours=3))
+        now = datetime.now(_MSK).strftime("%Y-%m-%d %H:%M:%S")
         cur.execute(
             """
             INSERT INTO balance_history (student_lesson_id, operation_type, lessons_delta, comment, created_at, created_by, amount_paid)
@@ -5364,7 +5367,8 @@ def create_payment_request_max(
     promo_code_id_used: int | None = None,
 ) -> int:
     """Create a payment request originating from MAX messenger."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _MSK = timezone(timedelta(hours=3))
+    now = datetime.now(_MSK).strftime("%Y-%m-%d %H:%M:%S")
     display_name = f"📱[MAX] {max_full_name}" if max_full_name else "📱[MAX]"
     display_username = f"@{max_username}" if max_username else None
     conn = get_connection()

@@ -32,6 +32,7 @@ from config import (
     PAYMENT_BANK_NUMBER,
     PAYMENT_PHOTO_FILE_ID,
     PAYMENTS_CHAT_ID,
+    TARIFF_PHOTO_FILE_ID,
     TG_BOT_TOKEN,
     TG_BOT_USERNAME,
 )
@@ -165,6 +166,33 @@ def _format_attendance_status(status: str) -> str:
 
 
 _payment_photo_url_cache: str | None = None
+_tariff_photo_url_cache: str | None = None
+
+
+async def _get_tariff_photo_url() -> str | None:
+    """Download the tariff photo from Telegram once, cache locally, return public URL."""
+    global _tariff_photo_url_cache
+    if _tariff_photo_url_cache is not None:
+        return _tariff_photo_url_cache or None
+    if not TARIFF_PHOTO_FILE_ID or not TG_BOT_TOKEN:
+        _tariff_photo_url_cache = ""
+        return None
+    try:
+        assets_dir = ROOT_DIR / "assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        target_path = assets_dir / "tariff_photo.jpg"
+        if not target_path.exists():
+            tg_bot = TelegramBot(token=TG_BOT_TOKEN)
+            tg_file = await tg_bot.get_file(TARIFF_PHOTO_FILE_ID)
+            await tg_bot.download_file(tg_file.file_path, destination=target_path)
+            await tg_bot.session.close()
+        if target_path.exists():
+            _tariff_photo_url_cache = f"{_SERVER_BASE_URL}/assets/tariff_photo.jpg"
+            return _tariff_photo_url_cache
+    except Exception as exc:
+        logger.warning("Failed to download tariff photo: %s", exc)
+    _tariff_photo_url_cache = ""
+    return None
 
 
 async def _get_payment_photo_url() -> str | None:
@@ -1198,11 +1226,21 @@ async def _dispatch_callback(
                 promo_note = f"\n🎟 Промокод {code} не применяется к пакетам."
                 promo = None  # don't apply discount in keyboard prices
         set_max_fsm_state(user_id, PACKAGE_SELECTION, data)
-        await _reply(
-            api, user_id, message_id,
-            f"📦 Выбор пакета{promo_note}\n\nВыберите количество занятий:",
-            package_selection_kb(PACKAGE_PRICES, promo),
-        )
+        tariff_photo_url = await _get_tariff_photo_url()
+        package_text = f"📦 Выбор пакета{promo_note}\n\nВыберите количество занятий:"
+        package_kb = package_selection_kb(PACKAGE_PRICES, promo)
+        if tariff_photo_url:
+            if message_id:
+                try:
+                    await api.delete_message(message_id)
+                except Exception:
+                    pass
+            try:
+                await api.send_photo_url(user_id, tariff_photo_url, caption=package_text, attachments=package_kb)
+                return
+            except Exception as exc:
+                logger.warning("Tariff photo send failed: %s", exc)
+        await _reply(api, user_id, message_id, package_text, package_kb)
         return
 
     if payload.startswith("pay_package_"):
@@ -1249,6 +1287,7 @@ async def _dispatch_callback(
                 promo_block = f"\n🎟 Применён промокод {code} ({int(dvalue_f)}{unit})\n"
 
         data["payment_type_label"] = payment_type_label
+        data["payment_type"] = f"pay_package_{lessons}"
         data["promo_applicable"] = promo is not None
         set_max_fsm_state(user_id, PAYMENT_PROOF, data)
         active_promo = get_active_promo_for_max_user(user_id)
