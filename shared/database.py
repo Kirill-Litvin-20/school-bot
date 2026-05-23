@@ -5834,6 +5834,40 @@ def assign_promo_to_student(student_id: int, promo_code_id: int) -> bool:
         return False
 
 
+def get_all_promos_for_sheet() -> list[dict]:
+    """Return all promo codes with full info for Google Sheets export."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT pc.id, pc.code, pc.discount_type, pc.discount_value,
+               pc.applies_to_packages, pc.valid_until, pc.max_uses,
+               pc.used_count, pc.active,
+               COALESCE(pc.created_at, '') AS created_at,
+               STRING_AGG(s.full_name, ', ' ORDER BY s.full_name) AS assigned_students
+        FROM promo_codes pc
+        LEFT JOIN student_promo_codes spc ON spc.promo_code_id = pc.id
+        LEFT JOIN students s ON s.id = spc.student_id
+        GROUP BY pc.id, pc.code, pc.discount_type, pc.discount_value,
+                 pc.applies_to_packages, pc.valid_until, pc.max_uses,
+                 pc.used_count, pc.active, pc.created_at
+        ORDER BY pc.active DESC, pc.id DESC
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {
+            "id": r[0], "code": r[1], "discount_type": r[2],
+            "discount_value": r[3], "applies_to_packages": r[4],
+            "valid_until": r[5], "max_uses": r[6], "used_count": r[7],
+            "active": r[8], "created_at": r[9] or "",
+            "assigned_students": r[10] or "",
+        }
+        for r in rows
+    ]
+
+
 def list_promo_codes() -> list[dict]:
     """Return all promo codes ordered by created_at desc."""
     conn = get_connection()
