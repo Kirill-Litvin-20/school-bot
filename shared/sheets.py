@@ -47,6 +47,11 @@ _TOPUPS_HEADER = ["Дата", "Время", "День", "Ученик", "Нап�
                   "+Занятий", "Сумма (₽)", "Тип", "Кто добавил", "Комментарий"]
 _C_TOPUPS_HEADER = {"red": 0.180, "green": 0.216, "blue": 0.451}   # dark indigo
 
+_DISCOUNTS_SHEET  = "Промокоды"
+_DISCOUNTS_HEADER = ["Код", "Скидка", "Применяется к", "Использований",
+                     "Действует до", "Назначен ученикам", "Статус", "Создан"]
+_C_DISCOUNTS_HEADER = {"red": 0.286, "green": 0.149, "blue": 0.557}  # purple
+
 # ── Display maps ───────────────────────────────────────────────────────────────
 _STATUS_LABELS = {"present": "Был", "absent": "Не был", "cancelled": "Отменено"}
 _TARIFF_LABELS = {"package": "Пакет", "per_lesson": "Поурочно", "subscription": "Абонемент"}
@@ -1281,6 +1286,105 @@ class SheetsClient:
             return True
         except Exception as exc:
             logger.error("update_topups_sheet failed: %s", exc)
+            return False
+
+    def update_discounts_sheet(self, promos: list[dict]) -> bool:
+        """Rewrite the «Промокоды» sheet with all promo codes."""
+        if not self.is_configured():
+            return False
+        try:
+            sp = self._open_spreadsheet()
+            if sp is None:
+                return False
+
+            n = len(_DISCOUNTS_HEADER)
+            ws = self._get_or_add_worksheet(sp, _DISCOUNTS_SHEET, rows=500, cols=n)
+            ws.clear()
+
+            _C_ACTIVE = {"red": 0.851, "green": 0.937, "blue": 0.855}   # light green
+            _C_ARCHIVE = {"red": 0.949, "green": 0.949, "blue": 0.949}  # light grey
+            _C_UPDATED = {"red": 0.949, "green": 0.949, "blue": 0.949}
+
+            _APPLIES = {0: "Разовые занятия", 1: "Пакеты занятий", 2: "Все"}
+
+            rows_data: list[list] = []
+            format_meta: list[dict] = []
+
+            # "Обновлено" row
+            rows_data.append([f"Обновлено: {_now_msk_str()}", *[""] * (n - 1)])
+            format_meta.append({"type": "updated", "row": len(rows_data)})
+
+            for p in promos:
+                dtype = p["discount_type"]
+                dval = p["discount_value"]
+                discount_str = f"{int(dval)}%" if dtype == "percent" else f"{int(dval)} ₽"
+
+                max_uses = p["max_uses"]
+                used = p["used_count"] or 0
+                uses_str = f"{used} / {max_uses}" if max_uses else f"{used} / ∞"
+
+                valid = p["valid_until"] or "бессрочно"
+                if valid and valid != "бессрочно":
+                    valid = valid[:10]  # date only
+
+                applies = _APPLIES.get(int(p.get("applies_to_packages") or 0), "Все")
+                status = "✅ Активен" if p["active"] else "📦 Архив"
+                created = (p.get("created_at") or "")[:10]
+                assigned = p.get("assigned_students") or "—"
+
+                rows_data.append([
+                    p["code"], discount_str, applies, uses_str,
+                    valid, assigned, status, created,
+                ])
+                is_active = bool(p["active"])
+                format_meta.append({"type": "active" if is_active else "archive",
+                                    "row": len(rows_data)})
+
+            ws.update("A1", [_DISCOUNTS_HEADER, *rows_data], value_input_option="USER_ENTERED")
+
+            sheet_id = ws.id
+            requests = [
+                self._header_format_request(sheet_id, n, _C_DISCOUNTS_HEADER),
+                self._freeze_request(sheet_id, rows=1),
+                # "Обновлено" row (index 1)
+                {"repeatCell": {
+                    "range": {"sheetId": sheet_id,
+                              "startRowIndex": 1, "endRowIndex": 2,
+                              "startColumnIndex": 0, "endColumnIndex": n},
+                    "cell": {"userEnteredFormat": {
+                        "backgroundColor": _rgb(_C_UPDATED),
+                        "textFormat": {"italic": True,
+                                       "foregroundColor": {"red": 0.5, "green": 0.5, "blue": 0.5},
+                                       "fontSize": 9},
+                    }},
+                    "fields": "userEnteredFormat(backgroundColor,textFormat)",
+                }},
+            ]
+
+            # Colour active / archive rows
+            for meta in format_meta:
+                if meta["type"] == "updated":
+                    continue
+                row_idx = meta["row"] + 1  # +1 because header row is first
+                colour = _C_ACTIVE if meta["type"] == "active" else _C_ARCHIVE
+                requests.append({"repeatCell": {
+                    "range": {"sheetId": sheet_id,
+                              "startRowIndex": row_idx, "endRowIndex": row_idx + 1,
+                              "startColumnIndex": 0, "endColumnIndex": n},
+                    "cell": {"userEnteredFormat": {"backgroundColor": _rgb(colour)}},
+                    "fields": "userEnteredFormat(backgroundColor)",
+                }})
+
+            # Auto-resize columns
+            requests.append({"autoResizeDimensions": {
+                "dimensions": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                               "startIndex": 0, "endIndex": n}
+            }})
+            self._batch_format(sp, requests)
+            logger.info("Sheets: Промокоды updated (%d rows)", len(promos))
+            return True
+        except Exception as exc:
+            logger.error("update_discounts_sheet failed: %s", exc)
             return False
 
 

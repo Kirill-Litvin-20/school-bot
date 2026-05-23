@@ -41,6 +41,7 @@ from keyboards import (
     get_superadmin_users_menu,
     get_superadmin_school_menu,
     get_superadmin_reports_menu,
+    get_superadmin_finance_menu,
     get_admin_menu,
     get_admin_management_menu,
     get_admin_education_menu,
@@ -153,6 +154,7 @@ from shared.database import (
     get_attendance_stats,
     get_revenue_by_period,
     get_topups_history,
+    get_all_promos_for_sheet,
 )
 
 router = Router()
@@ -682,6 +684,15 @@ async def superadmin_section_school(callback: CallbackQuery):
         await callback.answer("Нет доступа", show_alert=True)
         return
     await callback.message.answer("📚 <b>Учебный процесс</b>\n\nВыберите действие:", reply_markup=get_superadmin_school_menu(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "superadmin_section_finance")
+async def superadmin_section_finance(callback: CallbackQuery):
+    if callback.from_user.id not in SUPERADMINS:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.message.answer("💰 <b>Финансы и промокоды</b>\n\nВыберите действие:", reply_markup=get_superadmin_finance_menu(), parse_mode="HTML")
     await callback.answer()
 
 
@@ -3428,11 +3439,12 @@ async def _do_sheets_refresh(message) -> None:
         results = []
         client = get_sheets_client()
         for fetch_fn, update_fn, label in [
-            (get_weekly_payouts,       client.update_payouts_sheet,  "Выплаты"),
-            (get_all_student_balances, client.update_balances_sheet, "Балансы"),
-            (get_attendance_stats,     client.update_stats_sheet,    "Статистика"),
-            (get_revenue_by_period,    client.update_revenue_sheet,  "Выручка"),
-            (get_topups_history,       client.update_topups_sheet,   "Пополнения"),
+            (get_weekly_payouts,       client.update_payouts_sheet,   "Выплаты"),
+            (get_all_student_balances, client.update_balances_sheet,  "Балансы"),
+            (get_attendance_stats,     client.update_stats_sheet,     "Статистика"),
+            (get_revenue_by_period,    client.update_revenue_sheet,   "Выручка"),
+            (get_topups_history,       client.update_topups_sheet,    "Пополнения"),
+            (get_all_promos_for_sheet, client.update_discounts_sheet, "Промокоды"),
         ]:
             try:
                 data = await asyncio.to_thread(fetch_fn)
@@ -3448,11 +3460,12 @@ async def _do_sheets_refresh(message) -> None:
 
 
 _SHEET_TARGETS = {
-    "sheets_refresh_balances": (get_all_student_balances, "update_balances_sheet", "Балансы"),
-    "sheets_refresh_payouts":  (get_weekly_payouts,       "update_payouts_sheet",  "Выплаты"),
-    "sheets_refresh_stats":    (get_attendance_stats,     "update_stats_sheet",    "Статистика"),
-    "sheets_refresh_revenue":  (get_revenue_by_period,    "update_revenue_sheet",  "Выручка"),
-    "sheets_refresh_topups":   (get_topups_history,       "update_topups_sheet",   "Пополнения"),
+    "sheets_refresh_balances":  (get_all_student_balances, "update_balances_sheet",  "Балансы"),
+    "sheets_refresh_payouts":   (get_weekly_payouts,       "update_payouts_sheet",   "Выплаты"),
+    "sheets_refresh_stats":     (get_attendance_stats,     "update_stats_sheet",     "Статистика"),
+    "sheets_refresh_revenue":   (get_revenue_by_period,    "update_revenue_sheet",   "Выручка"),
+    "sheets_refresh_topups":    (get_topups_history,       "update_topups_sheet",    "Пополнения"),
+    "sheets_refresh_discounts": (get_all_promos_for_sheet, "update_discounts_sheet", "Промокоды"),
 }
 
 

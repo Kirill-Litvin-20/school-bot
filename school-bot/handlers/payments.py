@@ -544,10 +544,11 @@ async def package_back_to_type(callback: CallbackQuery, state: FSMContext):
     promo = get_active_promo_for_user(callback.from_user.id)
     promo_hint = ""
     if promo:
-        _, code, dtype, dvalue, *_ = promo
+        _, code, dtype, dvalue, atp, *_ = promo
         unit = "%" if dtype == "percent" else "₽"
-        scope = "на оплату 1 занятия" if dtype == "percent" else "на занятия и пакеты"
-        promo_hint = f"\n\nАктивная скидка: промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) ({scope})"
+        scope_map = {0: "разовые занятия", 1: "пакеты занятий", 2: "разовые и пакеты"}
+        scope = scope_map.get(int(atp or 0), "занятия")
+        promo_hint = f"\n\nАктивная скидка: промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) — {scope}"
     text = f"Выберите вариант оплаты:{promo_hint}"
     await state.set_state(ApplicationForm.payment_type_choice)
     try:
@@ -1087,12 +1088,15 @@ async def _apply_topup(
 
     # Build promo-used line for the notification
     promo_used_line = ""
-    if _promo_code_id_used:
-        promo_row = get_promo_code_by_id(_promo_code_id_used)
-        if promo_row:
-            _, pcode, pdtype, pdvalue = promo_row
-            punit = "%" if pdtype == "percent" else "₽"
-            promo_used_line = f"\n🎟 Промокод <b>{pcode}</b> (-{int(float(pdvalue))}{punit}) использован."
+    try:
+        if _promo_code_id_used:
+            promo_row = get_promo_code_by_id(_promo_code_id_used)
+            if promo_row:
+                _, pcode, pdtype, pdvalue = promo_row
+                punit = "%" if pdtype == "percent" else "₽"
+                promo_used_line = f"\n🎟 Промокод <b>{pcode}</b> (-{int(float(pdvalue))}{punit}) использован."
+    except Exception:
+        pass
 
     if telegram_user_id:
         try:
@@ -1113,15 +1117,43 @@ async def _apply_topup(
     else:
         source_platform, max_user_id = get_payment_platform_info(payment_request_id)
         if source_platform == "max" and max_user_id and _max_client:
+            # Send notification in MAX
             try:
+                promo_line_plain = ""
+                if _promo_code_id_used and promo_used_line:
+                    promo_row = get_promo_code_by_id(_promo_code_id_used)
+                    if promo_row:
+                        _, pcode, pdtype, pdvalue = promo_row
+                        punit = "%" if pdtype == "percent" else "₽"
+                        promo_line_plain = f"\n🎟 Промокод {pcode} (-{int(float(pdvalue))}{punit}) использован."
                 await _max_client.send_message(
                     max_user_id,
                     f"✅ Ваша оплата подтверждена!\n\n"
                     f"На баланс начислено {lessons_to_add} занятий.\n"
                     f"📚 Предмет: {subject_name}\n"
-                    f"👨‍🏫 Преподаватель: {teacher_name}",
+                    f"👨‍🏫 Преподаватель: {teacher_name}"
+                    f"{promo_line_plain}",
                     max_keyboard([max_btn("👤 Личный кабинет", "menu_cabinet")]),
                 )
+            except Exception:
+                pass
+            # Also notify via Telegram if the student has a linked TG account
+            try:
+                linked_students = find_students_by_max_id(max_user_id)
+                if linked_students and linked_students[0][2]:
+                    linked_tg_id = linked_students[0][2]
+                    await bot.send_message(
+                        linked_tg_id,
+                        f"✅ <b>Ваша оплата подтверждена!</b>\n\n"
+                        f"На баланс начислено {lessons_to_add} занятий.\n\n"
+                        f"📚 <b>Предмет:</b> {subject_name}\n"
+                        f"👨‍🏫 <b>Преподаватель:</b> {teacher_name}"
+                        f"{promo_used_line}",
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="open_cabinet")],
+                        ]),
+                    )
             except Exception:
                 pass
 

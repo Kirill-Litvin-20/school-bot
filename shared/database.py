@@ -1911,6 +1911,8 @@ def create_payment_request(
 ):
     conn = get_connection()
     cur = conn.cursor()
+    _MSK = timezone(timedelta(hours=3))
+    now = datetime.now(_MSK).strftime("%Y-%m-%d %H:%M:%S")
 
     cur.execute(
         """
@@ -1936,8 +1938,8 @@ def create_payment_request(
             caption_text,
             file_id,
             file_type,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            now,
+            now,
             preferred_direction_id,
             promo_code_id_used,
         )
@@ -2314,7 +2316,8 @@ def finalize_payment_with_topup(
             conn.rollback()
             return False
 
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _MSK = timezone(timedelta(hours=3))
+        now = datetime.now(_MSK).strftime("%Y-%m-%d %H:%M:%S")
         cur.execute(
             """
             INSERT INTO balance_history (student_lesson_id, operation_type, lessons_delta, comment, created_at, created_by, amount_paid)
@@ -4475,6 +4478,22 @@ def get_active_admin_telegram_ids() -> list[int]:
     return [int(row[0]) for row in rows if row and row[0] is not None]
 
 
+def get_all_active_max_user_ids() -> list[int]:
+    """Return all MAX user IDs that have interacted with the bot (have FSM state or are linked students)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT max_user_id FROM max_fsm_state
+        UNION
+        SELECT DISTINCT max_id FROM students WHERE max_id IS NOT NULL
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [int(row[0]) for row in rows if row and row[0] is not None]
+
+
 def set_admin_visibility(telegram_id: int, is_visible: bool) -> bool:
     """Устанавливает видимость админа для учеников (по умолчанию видимы все)."""
     conn = get_connection()
@@ -5364,7 +5383,8 @@ def create_payment_request_max(
     promo_code_id_used: int | None = None,
 ) -> int:
     """Create a payment request originating from MAX messenger."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _MSK = timezone(timedelta(hours=3))
+    now = datetime.now(_MSK).strftime("%Y-%m-%d %H:%M:%S")
     display_name = f"📱[MAX] {max_full_name}" if max_full_name else "📱[MAX]"
     display_username = f"@{max_username}" if max_username else None
     conn = get_connection()
@@ -5812,6 +5832,40 @@ def assign_promo_to_student(student_id: int, promo_code_id: int) -> bool:
     except Exception:
         conn.close()
         return False
+
+
+def get_all_promos_for_sheet() -> list[dict]:
+    """Return all promo codes with full info for Google Sheets export."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT pc.id, pc.code, pc.discount_type, pc.discount_value,
+               pc.applies_to_packages, pc.valid_until, pc.max_uses,
+               pc.used_count, pc.active,
+               COALESCE(pc.created_at, '') AS created_at,
+               STRING_AGG(s.full_name, ', ' ORDER BY s.full_name) AS assigned_students
+        FROM promo_codes pc
+        LEFT JOIN student_promo_codes spc ON spc.promo_code_id = pc.id
+        LEFT JOIN students s ON s.id = spc.student_id
+        GROUP BY pc.id, pc.code, pc.discount_type, pc.discount_value,
+                 pc.applies_to_packages, pc.valid_until, pc.max_uses,
+                 pc.used_count, pc.active, pc.created_at
+        ORDER BY pc.active DESC, pc.id DESC
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {
+            "id": r[0], "code": r[1], "discount_type": r[2],
+            "discount_value": r[3], "applies_to_packages": r[4],
+            "valid_until": r[5], "max_uses": r[6], "used_count": r[7],
+            "active": r[8], "created_at": r[9] or "",
+            "assigned_students": r[10] or "",
+        }
+        for r in rows
+    ]
 
 
 def list_promo_codes() -> list[dict]:
