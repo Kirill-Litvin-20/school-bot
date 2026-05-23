@@ -817,7 +817,10 @@ async def link_max_start(callback: CallbackQuery):
     import os
     code = create_account_link_code(telegram_id)
     max_bot_username = os.getenv("SCHOOL_MAX_BOT_USERNAME", "")
-    max_bot_hint = f"\nБот в MAX: @{max_bot_username}" if max_bot_username else ""
+    max_bot_hint = (
+        f'\n\nБот в MAX: <a href="https://max.ru/{max_bot_username}">@{max_bot_username}</a>'
+        if max_bot_username else ""
+    )
     await callback.message.answer(
         "🔗 <b>Подключение MAX</b>\n\n"
         "Откройте бот школы в MAX-мессенджере и введите команду:\n\n"

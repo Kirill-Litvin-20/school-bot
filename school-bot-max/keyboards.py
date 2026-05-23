@@ -15,15 +15,11 @@ sys.path.append(str(ROOT_DIR))
 
 from shared.max_api import btn, btn_url, keyboard
 from shared.database import get_teacher_catalog_subjects, get_teacher_catalog_name_subject_pairs
-from config import MAX_ADMIN_USERNAME, MAX_ADMIN_TG_USERNAME
+from config import MAX_ADMIN_USERNAME, MAX_ADMIN_TG_USERNAME, MAX_ADMIN_PHONE
 
 
 def _admin_btn_rows() -> list[list[dict]]:
-    if MAX_ADMIN_USERNAME:
-        return [[btn_url("✉️ Написать администратору", f"https://max.ru/{MAX_ADMIN_USERNAME}")]]
-    if MAX_ADMIN_TG_USERNAME:
-        return [[btn_url("✉️ Написать администратору", f"https://t.me/{MAX_ADMIN_TG_USERNAME}")]]
-    return []
+    return [[btn("✉️ Написать администратору", "write_admin")]]
 
 SUBJECTS = [
     "Математика",
@@ -63,7 +59,7 @@ def cabinet_kb(tg_linked: bool = False) -> list[dict]:
         [btn("💳 Оплатить занятия", "menu_paid")],
         [btn("🎟 Ввести промокод", "enter_promo")],
         [btn("🎁 Реферальный код", "show_referral_code")],
-        [btn_url("✉️ Написать администратору", "https://t.me/integral_school_ru")],
+        [btn("✉️ Написать администратору", "write_admin")],
     ]
     if not tg_linked:
         rows.append([btn("🔗 Связать с Telegram", "link_tg")])

@@ -25,6 +25,7 @@ sys.path.append(str(ROOT_DIR))
 from config import (
     APPLICATIONS_CHAT_ID,
     LESSON_PRICE,
+    MAX_ADMIN_PHONE,
     MAX_BOT_USERNAME,
     PACKAGE_PRICES,
     PAYMENT_ACCOUNT_HOLDER,
@@ -80,7 +81,7 @@ from shared.database import (
     set_max_fsm_state,
     try_auto_link_max_by_phone,
 )
-from shared.max_api import MaxApiClient, btn, keyboard
+from shared.max_api import MaxApiClient, btn, btn_url, keyboard
 from states import (
     APP_CLASS,
     APP_COMMENT,
@@ -1467,6 +1468,19 @@ async def _dispatch_callback(
         await _reply(api, user_id, message_id, "❓ ПОМОЩЬ И ЧАСТЫЕ ВОПРОСЫ", faq_kb())
         return
 
+    if payload == "write_admin":
+        phone = MAX_ADMIN_PHONE or "89779996689"
+        phone_tel = "+7" + phone[1:] if phone.startswith("8") else phone
+        await _reply(
+            api, user_id, message_id,
+            f"📞 Напишите администратору на номер:\n\n{phone}",
+            keyboard(
+                [btn_url(f"📞 {phone}", f"tel:{phone_tel}")],
+                [btn("← Назад", "back_to_menu")],
+            ),
+        )
+        return
+
     if payload == "faq_pay":
         await _reply(
             api, user_id, message_id,
@@ -1672,7 +1686,6 @@ async def _dispatch_callback(
             await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе. Обратитесь к администратору.", back_menu_kb())
             return
         telegram_id = students[0][2]
-        from shared.max_api import btn_url
         if telegram_id:
             tg_bot_username = TG_BOT_USERNAME or "integral_school_ru_bot"
             referral_link = f"https://t.me/{tg_bot_username}?start=ref_{telegram_id}"
