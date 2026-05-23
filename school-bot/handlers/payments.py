@@ -573,15 +573,10 @@ async def get_payment_proof(message: Message, state: FSMContext):
         file_type = "photo"
     elif message.document:
         doc = message.document
-        file_name = (doc.file_name or "").lower()
-        mime_type = (doc.mime_type or "").lower()
-        if mime_type != "application/pdf" and not file_name.endswith(".pdf"):
-            await message.answer("❓ Пожалуйста, отправьте PDF-файл чека.")
-            return
         file_id = doc.file_id
-        file_type = "pdf"
+        file_type = "document"
     else:
-        await message.answer("❓ Пожалуйста, отправьте фото или PDF-файл чека.")
+        await message.answer("❓ Пожалуйста, отправьте фото или файл чека (PDF, ODF и др.).")
         return
 
     fsm_data = await state.get_data()
@@ -647,7 +642,7 @@ async def get_payment_proof(message: Message, state: FSMContext):
         direction_label=direction_label,
     )
 
-    if file_type == "pdf":
+    if file_type != "photo":
         await message.bot.send_document(
             PAYMENTS_CHAT_ID,
             document=file_id,

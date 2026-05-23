@@ -628,12 +628,7 @@ async def handle_file(
             main_menu_kb(),
         )
         return
-    fname = (filename or "").lower()
-    mime = (mime_type or "").lower()
-    if not fname.endswith(".pdf") and "pdf" not in mime:
-        await api.send_message(user_id, "❓ Пожалуйста, отправьте PDF-файл чека.", keyboard([btn("← В меню", "back_to_menu")]))
-        return
-    await _process_payment_file(api, user_id, username, name, file_url, "pdf", caption)
+    await _process_payment_file(api, user_id, username, name, file_url, "document", caption)
 
 
 async def handle_callback(
@@ -776,7 +771,7 @@ async def _process_payment_file(
 
     try:
         tg_bot = TelegramBot(token=TG_BOT_TOKEN)
-        ext = "pdf" if file_type == "pdf" else "jpg"
+        ext = "jpg" if file_type == "photo" else "pdf"
         input_file = BufferedInputFile(file_bytes, filename=f"receipt.{ext}")
 
         state, fsm_data = get_max_fsm_state(user_id)
@@ -846,7 +841,7 @@ async def _process_payment_file(
             ]
         )
 
-        if file_type == "pdf":
+        if file_type != "photo":
             sent = await tg_bot.send_document(
                 PAYMENTS_CHAT_ID,
                 document=input_file,
