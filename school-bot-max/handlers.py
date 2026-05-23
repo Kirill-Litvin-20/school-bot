@@ -782,8 +782,18 @@ async def _process_payment_file(
 
         # Determine if promo was actually applied
         promo = get_active_promo_for_max_user(user_id)
-        promo_applicable = fsm_data.get("promo_applicable", True)
-        promo_applied = promo if (promo and not skip_promo and payment_type != "pay_debt" and promo_applicable) else None
+        promo_applicable = False
+        if promo and not skip_promo and payment_type != "pay_debt":
+            atp = int((promo[4] if len(promo) > 4 else None) or 0)
+            is_single = payment_type == "pay_single"
+            is_package = payment_type.startswith("pay_package_")
+            if is_single and atp == 1:      # пакеты only — не применять к разовым
+                promo_applicable = False
+            elif is_package and atp == 0:   # разовые only — не применять к пакетам
+                promo_applicable = False
+            else:
+                promo_applicable = True
+        promo_applied = promo if promo_applicable else None
         promo_code_id_used = promo_applied[0] if promo_applied else None
 
         payment_request_id = create_payment_request_max(
