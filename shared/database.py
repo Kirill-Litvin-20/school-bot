@@ -3332,6 +3332,8 @@ def delete_student_by_telegram_id(telegram_id: int) -> dict:
     deleted_balance_history = 0
 
     for student_id in student_ids:
+        cur.execute("DELETE FROM student_promo_codes WHERE student_id = %s", (student_id,))
+
         cur.execute("SELECT id FROM student_lessons WHERE student_id = %s", (student_id,))
         lesson_ids = [row[0] for row in cur.fetchall()]
 
