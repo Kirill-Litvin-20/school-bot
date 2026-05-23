@@ -1470,14 +1470,10 @@ async def _dispatch_callback(
 
     if payload == "write_admin":
         phone = MAX_ADMIN_PHONE or "89779996689"
-        phone_tel = "+7" + phone[1:] if phone.startswith("8") else phone
         await _reply(
             api, user_id, message_id,
             f"📞 Напишите администратору на номер:\n\n{phone}",
-            keyboard(
-                [btn_url(f"📞 {phone}", f"tel:{phone_tel}")],
-                [btn("← Назад", "back_to_menu")],
-            ),
+            keyboard([btn("← Назад", "back_to_menu")]),
         )
         return
 
