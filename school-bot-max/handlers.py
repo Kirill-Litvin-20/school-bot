@@ -1219,7 +1219,9 @@ async def _dispatch_callback(
         if not students:
             await _reply(api, user_id, message_id, "❌ Вы не зарегистрированы в системе.", back_menu_kb())
             return
-        promo = get_active_promo_for_max_user(user_id)
+        skip_promo = data.get("skip_promo", False)
+        promo = None if skip_promo else get_active_promo_for_max_user(user_id)
+        active_promo_in_db = get_active_promo_for_max_user(user_id)
         payment_type_label = f"📦 Пакет {lessons} занятий"
 
         # Check if promo applies to packages
@@ -1235,7 +1237,9 @@ async def _dispatch_callback(
         # Price calculation
         price_block = f"\n💵 Стоимость пакета: {price}₽\n"
         promo_block = ""
-        if promo:
+        if skip_promo and active_promo_in_db:
+            promo_block = "\n🎟 Промокод не применяется к этому платежу.\n"
+        elif promo:
             _, code, dtype, dvalue, *_ = promo
             dvalue_f = float(dvalue)
             unit = "%" if dtype == "percent" else "₽"
@@ -1248,16 +1252,16 @@ async def _dispatch_callback(
                 price_block = f"\n💵 Стоимость пакета: {price}₽\n🎟 Скидка: -{int(dvalue_f)}%\n✅ К оплате: {after}₽\n"
                 promo_block = f"\n🎟 Применён промокод {code} ({int(dvalue_f)}{unit})\n"
 
+        data["payment_type"] = payload
         data["payment_type_label"] = payment_type_label
         data["promo_applicable"] = promo is not None
         set_max_fsm_state(user_id, PAYMENT_PROOF, data)
-        active_promo = get_active_promo_for_max_user(user_id)
         if promo:
             package_kb = keyboard(
                 [btn("🚫 Оплатить без промокода", "pay_skip_promo")],
                 [btn("← Назад", "pay_back_to_type")],
             )
-        elif not active_promo or promo_not_applicable_note:
+        elif not active_promo_in_db or promo_not_applicable_note:
             package_kb = keyboard(
                 [btn("🎟 Ввести промокод", "enter_promo")],
                 [btn("← Назад", "pay_back_to_type")],
@@ -1288,10 +1292,10 @@ async def _dispatch_callback(
         promo = get_active_promo_for_max_user(user_id)
         promo_hint = ""
         if promo:
-            _, code, dtype, dvalue, *_ = promo
+            _, code, dtype, dvalue, atp, *_ = promo
             unit = "%" if dtype == "percent" else "₽"
-            scope = "на оплату 1 занятия" if dtype == "percent" else "на занятия и пакеты"
-            promo_hint = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) ({scope})"
+            scope_map = {0: "разовые занятия", 1: "пакеты занятий", 2: "разовые и пакеты"}
+            promo_hint = f"\n🎟 Промокод {code} (-{int(float(dvalue))}{unit}) — {scope_map.get(int(atp or 0), 'занятия')}"
         set_max_fsm_state(user_id, PAYMENT_TYPE_CHOICE, data)
         await _reply(
             api, user_id, message_id,

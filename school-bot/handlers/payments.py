@@ -544,10 +544,11 @@ async def package_back_to_type(callback: CallbackQuery, state: FSMContext):
     promo = get_active_promo_for_user(callback.from_user.id)
     promo_hint = ""
     if promo:
-        _, code, dtype, dvalue, *_ = promo
+        _, code, dtype, dvalue, atp, *_ = promo
         unit = "%" if dtype == "percent" else "₽"
-        scope = "на оплату 1 занятия" if dtype == "percent" else "на занятия и пакеты"
-        promo_hint = f"\n\nАктивная скидка: промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) ({scope})"
+        scope_map = {0: "разовые занятия", 1: "пакеты занятий", 2: "разовые и пакеты"}
+        scope = scope_map.get(int(atp or 0), "занятия")
+        promo_hint = f"\n\nАктивная скидка: промокод <b>{code}</b> (-{int(float(dvalue))}{unit}) — {scope}"
     text = f"Выберите вариант оплаты:{promo_hint}"
     await state.set_state(ApplicationForm.payment_type_choice)
     try:
