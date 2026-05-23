@@ -1911,6 +1911,8 @@ def create_payment_request(
 ):
     conn = get_connection()
     cur = conn.cursor()
+    _MSK = timezone(timedelta(hours=3))
+    now = datetime.now(_MSK).strftime("%Y-%m-%d %H:%M:%S")
 
     cur.execute(
         """
@@ -1936,8 +1938,8 @@ def create_payment_request(
             caption_text,
             file_id,
             file_type,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            now,
+            now,
             preferred_direction_id,
             promo_code_id_used,
         )
@@ -2314,7 +2316,8 @@ def finalize_payment_with_topup(
             conn.rollback()
             return False
 
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _MSK = timezone(timedelta(hours=3))
+        now = datetime.now(_MSK).strftime("%Y-%m-%d %H:%M:%S")
         cur.execute(
             """
             INSERT INTO balance_history (student_lesson_id, operation_type, lessons_delta, comment, created_at, created_by, amount_paid)
@@ -4475,6 +4478,22 @@ def get_active_admin_telegram_ids() -> list[int]:
     return [int(row[0]) for row in rows if row and row[0] is not None]
 
 
+def get_all_active_max_user_ids() -> list[int]:
+    """Return all MAX user IDs that have interacted with the bot (have FSM state or are linked students)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT max_user_id FROM max_fsm_state
+        UNION
+        SELECT DISTINCT max_id FROM students WHERE max_id IS NOT NULL
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [int(row[0]) for row in rows if row and row[0] is not None]
+
+
 def set_admin_visibility(telegram_id: int, is_visible: bool) -> bool:
     """Устанавливает видимость админа для учеников (по умолчанию видимы все)."""
     conn = get_connection()
@@ -5364,7 +5383,8 @@ def create_payment_request_max(
     promo_code_id_used: int | None = None,
 ) -> int:
     """Create a payment request originating from MAX messenger."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _MSK = timezone(timedelta(hours=3))
+    now = datetime.now(_MSK).strftime("%Y-%m-%d %H:%M:%S")
     display_name = f"📱[MAX] {max_full_name}" if max_full_name else "📱[MAX]"
     display_username = f"@{max_username}" if max_username else None
     conn = get_connection()
