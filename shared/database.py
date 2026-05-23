@@ -3215,12 +3215,11 @@ def resolve_student_teacher_telegram_conflicts() -> dict:
 def delete_admin_by_telegram_id(telegram_id: int) -> dict:
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("BEGIN")
 
     cur.execute(
         """
         DELETE FROM users
-        WHERE telegram_id = ? AND role = 'admin'
+        WHERE telegram_id = %s AND role = 'admin'
         """,
         (telegram_id,),
     )
@@ -3237,13 +3236,12 @@ def delete_admin_by_telegram_id(telegram_id: int) -> dict:
 def delete_teacher_by_telegram_id(telegram_id: int) -> dict:
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("BEGIN")
 
     cur.execute(
         """
         SELECT full_name
         FROM users
-        WHERE telegram_id = ? AND role = 'teacher'
+        WHERE telegram_id = %s AND role = 'teacher'
         LIMIT 1
         """,
         (telegram_id,),
@@ -3255,7 +3253,7 @@ def delete_teacher_by_telegram_id(telegram_id: int) -> dict:
         """
         SELECT id
         FROM teachers
-        WHERE telegram_id = ?
+        WHERE telegram_id = %s
         """,
         (telegram_id,),
     )
@@ -3266,7 +3264,7 @@ def delete_teacher_by_telegram_id(telegram_id: int) -> dict:
             """
             SELECT id
             FROM teachers
-            WHERE full_name = ?
+            WHERE full_name = %s
             """,
             (teacher_full_name,),
         )
@@ -3278,26 +3276,26 @@ def delete_teacher_by_telegram_id(telegram_id: int) -> dict:
     deleted_teachers = 0
 
     for teacher_id in teacher_ids:
-        cur.execute("DELETE FROM teacher_subjects WHERE teacher_id = ?", (teacher_id,))
-        cur.execute("SELECT id FROM student_lessons WHERE teacher_id = ?", (teacher_id,))
+        cur.execute("DELETE FROM teacher_subjects WHERE teacher_id = %s", (teacher_id,))
+        cur.execute("SELECT id FROM student_lessons WHERE teacher_id = %s", (teacher_id,))
         lesson_ids = [row[0] for row in cur.fetchall()]
 
         for lesson_id in lesson_ids:
-            cur.execute("DELETE FROM attendance WHERE student_lesson_id = ?", (lesson_id,))
+            cur.execute("DELETE FROM attendance WHERE student_lesson_id = %s", (lesson_id,))
             deleted_attendance += cur.rowcount
-            cur.execute("DELETE FROM balance_history WHERE student_lesson_id = ?", (lesson_id,))
+            cur.execute("DELETE FROM balance_history WHERE student_lesson_id = %s", (lesson_id,))
             deleted_balance_history += cur.rowcount
 
-        cur.execute("DELETE FROM student_lessons WHERE teacher_id = ?", (teacher_id,))
+        cur.execute("DELETE FROM student_lessons WHERE teacher_id = %s", (teacher_id,))
         deleted_lessons += cur.rowcount
 
-        cur.execute("DELETE FROM teachers WHERE id = ?", (teacher_id,))
+        cur.execute("DELETE FROM teachers WHERE id = %s", (teacher_id,))
         deleted_teachers += cur.rowcount
 
     cur.execute(
         """
         DELETE FROM users
-        WHERE telegram_id = ? AND role = 'teacher'
+        WHERE telegram_id = %s AND role = 'teacher'
         """,
         (telegram_id,),
     )
@@ -3318,13 +3316,12 @@ def delete_teacher_by_telegram_id(telegram_id: int) -> dict:
 def delete_student_by_telegram_id(telegram_id: int) -> dict:
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("BEGIN")
 
     cur.execute(
         """
         SELECT id
         FROM students
-        WHERE telegram_id = ?
+        WHERE telegram_id = %s
         """,
         (telegram_id,),
     )
@@ -3335,22 +3332,22 @@ def delete_student_by_telegram_id(telegram_id: int) -> dict:
     deleted_balance_history = 0
 
     for student_id in student_ids:
-        cur.execute("SELECT id FROM student_lessons WHERE student_id = ?", (student_id,))
+        cur.execute("SELECT id FROM student_lessons WHERE student_id = %s", (student_id,))
         lesson_ids = [row[0] for row in cur.fetchall()]
 
         for lesson_id in lesson_ids:
-            cur.execute("DELETE FROM attendance WHERE student_lesson_id = ?", (lesson_id,))
+            cur.execute("DELETE FROM attendance WHERE student_lesson_id = %s", (lesson_id,))
             deleted_attendance += cur.rowcount
-            cur.execute("DELETE FROM balance_history WHERE student_lesson_id = ?", (lesson_id,))
+            cur.execute("DELETE FROM balance_history WHERE student_lesson_id = %s", (lesson_id,))
             deleted_balance_history += cur.rowcount
 
-        cur.execute("DELETE FROM student_lessons WHERE student_id = ?", (student_id,))
+        cur.execute("DELETE FROM student_lessons WHERE student_id = %s", (student_id,))
         deleted_lessons += cur.rowcount
 
     cur.execute(
         """
         DELETE FROM payment_requests
-        WHERE telegram_user_id = ?
+        WHERE telegram_user_id = %s
         """,
         (telegram_id,),
     )
@@ -3359,7 +3356,7 @@ def delete_student_by_telegram_id(telegram_id: int) -> dict:
     cur.execute(
         """
         DELETE FROM students
-        WHERE telegram_id = ?
+        WHERE telegram_id = %s
         """,
         (telegram_id,),
     )
@@ -3368,7 +3365,7 @@ def delete_student_by_telegram_id(telegram_id: int) -> dict:
     cur.execute(
         """
         DELETE FROM users
-        WHERE telegram_id = ? AND role = 'student'
+        WHERE telegram_id = %s AND role = 'student'
         """,
         (telegram_id,),
     )
