@@ -17,12 +17,13 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT_DIR))
 
 from config import BOT_TOKEN
-from config import SCHOOL_BOT_TOKEN, SUPERADMINS
+from config import MAX_BOT_TOKEN, SCHOOL_BOT_TOKEN, SUPERADMINS
 from handlers import router
 from shared.database import (
     build_daily_debt_report,
     get_active_admin_telegram_ids,
     get_active_student_telegram_ids,
+    get_active_student_max_ids,
     get_due_publication_posts,
     init_db,
     is_daily_debt_report_sent,
@@ -259,7 +260,23 @@ async def publication_worker():
                             if first_error is None:
                                 first_error = str(exc)
 
-                    if not recipients:
+                    # ── MAX рассылка ──────────────────────────────────────
+                    if MAX_BOT_TOKEN and audience != "creator_only":
+                        max_ids = get_active_student_max_ids()
+                        if max_ids:
+                            from shared.max_api import MaxApiClient
+                            max_api = MaxApiClient(MAX_BOT_TOKEN)
+                            for max_uid in max_ids:
+                                try:
+                                    await max_api.send_message(max_uid, text)
+                                    sent_any = True
+                                except Exception as exc:
+                                    logger.warning(
+                                        "Publication %s: MAX send failed uid=%s: %s",
+                                        post_id, max_uid, exc,
+                                    )
+
+                    if not recipients and not (MAX_BOT_TOKEN and audience != "creator_only"):
                         mark_publication_post_failed(
                             int(post_id),
                             "Нет активных учеников с Telegram ID для рассылки.",

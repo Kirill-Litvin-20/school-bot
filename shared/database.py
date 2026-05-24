@@ -3930,6 +3930,23 @@ def get_active_student_telegram_ids() -> list[int]:
     return [int(row[0]) for row in rows if row and row[0] is not None]
 
 
+def get_active_student_max_ids() -> list[int]:
+    """Return MAX user IDs of all students who have a linked MAX account."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT max_id
+        FROM students
+        WHERE max_id IS NOT NULL
+        ORDER BY max_id
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [int(row[0]) for row in rows if row and row[0] is not None]
+
+
 def get_student_by_telegram_id(telegram_id: int):
     conn = get_connection()
     cur = conn.cursor()
